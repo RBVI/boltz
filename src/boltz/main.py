@@ -560,7 +560,7 @@ def predict(
     use_msa_server: bool = False,
     msa_server_url: str = "https://api.colabfold.com",
     msa_pairing_strategy: str = "greedy",
-    use_cuda_bloat16: bool = False,
+    use_cuda_bfloat16: bool = False,
 ) -> None:
     """Run predictions with Boltz-1."""
     # If cpu, write a friendly warning
