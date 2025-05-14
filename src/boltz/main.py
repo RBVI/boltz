@@ -535,6 +535,11 @@ def cli() -> None:
     help="Pairing strategy to use. Used only if --use_msa_server is set. Options are 'greedy' and 'complete'",
     default="greedy",
 )
+@click.option(
+    "--use_cuda_bfloat16",
+    is_flag=True,
+    help="Whether to run Boltz model in bfloat16 format when using CUDA instead of float32 to reduce memory use and allow prediction of 40% larger structures.  Prediction accuracy may be reduced.  Has no effect if CUDA is not used.  Default is False.",
+)
 def predict(
     data: str,
     out_dir: str,
@@ -555,6 +560,7 @@ def predict(
     use_msa_server: bool = False,
     msa_server_url: str = "https://api.colabfold.com",
     msa_pairing_strategy: str = "greedy",
+    use_cuda_bloat16: bool = False,
 ) -> None:
     """Run predictions with Boltz-1."""
     # If cpu, write a friendly warning
@@ -675,12 +681,18 @@ def predict(
         precision=32,
     )
 
-    # Compute predictions
-    trainer.predict(
-        model_module,
-        datamodule=data_module,
-        return_predictions=False,
-    )
+    def compute_predictions():
+        trainer.predict(
+            model_module,
+            datamodule=data_module,
+            return_predictions=False,
+        )
+
+     if use_cuda_bfloat16:
+         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+             compute_predictions()
+     else:
+         compute_predictions()
 
 
 if __name__ == "__main__":
