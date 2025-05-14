@@ -688,11 +688,11 @@ def predict(
             return_predictions=False,
         )
 
-     if use_cuda_bfloat16:
-         with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-             compute_predictions()
-     else:
-         compute_predictions()
+    if use_cuda_bfloat16:
+        with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+            compute_predictions()
+    else:
+        compute_predictions()
 
 
 if __name__ == "__main__":
