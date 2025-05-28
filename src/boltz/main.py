@@ -603,10 +603,13 @@ def cli() -> None:
     "--no_potentials",
     is_flag=True,
     help="Whether to not use potentials for steering. Default is False.",
+)
+@click.option(
     "--use_cuda_bfloat16",
     is_flag=True,
     help="Whether to run Boltz model in bfloat16 format when using CUDA instead of float32 to reduce memory use and allow prediction of 40% larger structures.  Prediction accuracy may be reduced.  Has no effect if CUDA is not used.  Default is False.",
 )
+
 def predict(
     data: str,
     out_dir: str,
