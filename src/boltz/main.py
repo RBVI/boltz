@@ -1120,6 +1120,12 @@ def predict(  # noqa: C901, PLR0915, PLR0912
         boltz2=model == "boltz2",
     )
 
+    # bfloat16 is many times slower than float32 except with Nvidia CUDA.
+    if platform in ('linux', 'windows') and accelerator == 'gpu' and torch.cuda.is_available() and model != "boltz1":
+        precision = "bf16-mixed"
+    else:
+        precision = 32
+        
     # Set up trainer
     trainer = Trainer(
         default_root_dir=out_dir,
@@ -1127,7 +1133,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
         callbacks=[pred_writer],
         accelerator=accelerator,
         devices=devices,
-        precision=32 if model == "boltz1" else "bf16-mixed",
+        precision=precision,
     )
 
     if filtered_manifest.records:
