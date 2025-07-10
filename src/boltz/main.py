@@ -1121,7 +1121,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
     )
 
     # bfloat16 is many times slower than float32 except with Nvidia CUDA.
-    if platform in ('linux', 'windows') and accelerator == 'gpu' and torch.cuda.is_available() and model != "boltz1":
+    if platform.system() in ('Linux', 'Windows') and accelerator == 'gpu' and torch.cuda.is_available() and model != "boltz1":
         precision = "bf16-mixed"
     else:
         precision = 32
