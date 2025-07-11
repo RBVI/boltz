@@ -934,6 +934,12 @@ def cli() -> None:
     is_flag=True,
     help="Whether to disable the kernels. Default False",
 )
+@click.option(
+    "--precision",
+    type=str,
+    help="What floating point precision to use: 32, bf16-mixed, 16, bf16-true.... This value is passed to pytorch_lighting Trainer as the precision option.  If not specified, use bf16-mixed on linux/nvidia and 32 on other platforms."
+    default=None,
+)
 def predict(  # noqa: C901, PLR0915, PLR0912
     data: str,
     out_dir: str,
@@ -967,6 +973,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
     subsample_msa: bool = True,
     num_subsampled_msa: int = 1024,
     no_kernels: bool = False,
+    precision: Optional[str] = None,
 ) -> None:
     """Run predictions with Boltz."""
     # If cpu, write a friendly warning
@@ -1121,10 +1128,14 @@ def predict(  # noqa: C901, PLR0915, PLR0912
     )
 
     # bfloat16 is many times slower than float32 except with Nvidia CUDA.
-    if platform.system() in ('Linux', 'Windows') and accelerator == 'gpu' and torch.cuda.is_available() and model != "boltz1":
-        precision = "bf16-mixed"
-    else:
-        precision = 32
+    if precision is None:
+        if (platform.system() in ('Linux', 'Windows')
+            and accelerator == 'gpu'
+            and torch.cuda.is_available()
+            and model != "boltz1"):
+            precision = "bf16-mixed"
+        else:
+            precision = 32
         
     # Set up trainer
     trainer = Trainer(
