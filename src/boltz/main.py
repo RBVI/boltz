@@ -734,8 +734,8 @@ def process_inputs(
 
 @click.group()
 def cli() -> None:
-    """Boltz."""
-    return
+    from . import __version__
+    print(f'Boltz version {__version__}')
 
 
 @cli.command()
