@@ -1196,6 +1196,8 @@ def predict(  # noqa: C901, PLR0915, PLR0912
         steering_args.guidance_update = use_potentials
 
         model_cls = Boltz2 if model == "boltz2" else Boltz1
+        import sys, time
+        sys.stderr.write(f'{time.ctime()}: Loading Boltz structure prediction weights\n')
         model_module = model_cls.load_from_checkpoint(
             checkpoint,
             strict=True,
@@ -1209,13 +1211,17 @@ def predict(  # noqa: C901, PLR0915, PLR0912
             steering_args=asdict(steering_args),
         )
         model_module.eval()
+        sys.stderr.write(f'{time.ctime()}: Finished loading Boltz structure prediction weights\n')
 
         # Compute structure predictions
+        import sys, time
+        sys.stderr.write(f'{time.ctime()}: Starting structure inference\n')
         trainer.predict(
             model_module,
             datamodule=data_module,
             return_predictions=False,
         )
+        sys.stderr.write(f'{time.ctime()}: Finished structure inference\n')
 
     # Check if affinity predictions are needed
     if any(r.affinity for r in manifest.records):
@@ -1268,6 +1274,8 @@ def predict(  # noqa: C901, PLR0915, PLR0912
         if affinity_checkpoint is None:
             affinity_checkpoint = cache / "boltz2_aff.ckpt"
 
+        import sys, time
+        sys.stderr.write(f'{time.ctime()}: Loading affinity prediction weights\n')
         model_module = Boltz2.load_from_checkpoint(
             affinity_checkpoint,
             strict=True,
@@ -1281,13 +1289,17 @@ def predict(  # noqa: C901, PLR0915, PLR0912
             affinity_mw_correction=affinity_mw_correction,
         )
         model_module.eval()
+        sys.stderr.write(f'{time.ctime()}: Finished loading affinity prediction weights\n')
 
+        import sys, time
+        sys.stderr.write(f'{time.ctime()}: Starting affinity inference\n')
         trainer.callbacks[0] = pred_writer
         trainer.predict(
             model_module,
             datamodule=data_module,
             return_predictions=False,
         )
+        sys.stderr.write(f'{time.ctime()}: Finished affinity inference\n')
 
 
 if __name__ == "__main__":
