@@ -1039,6 +1039,7 @@ def cli() -> None:
     type=str,
     help="What floating point precision to use: 32, bf16-mixed, 16, bf16-true.... This value is passed to pytorch_lighting Trainer as the precision option.  If not specified, use bf16-mixed on linux/nvidia and 32 on other platforms.",
     default=None,
+)
 @click.option(
     "--write_embeddings",
     is_flag=True,
