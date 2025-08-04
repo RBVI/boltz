@@ -296,20 +296,9 @@ def check_inputs(data: Path) -> list[Path]:
 
     # Check if data is a directory
     if data.is_dir():
-        data: list[Path] = list(data.glob("*"))
-
-        # Filter out non .fasta or .yaml files, raise
-        # an error on directory and other file types
-        for d in data:
-            if d.is_dir():
-                msg = f"Found directory {d} instead of .fasta or .yaml."
-                raise RuntimeError(msg)
-            if d.suffix.lower() not in (".fa", ".fas", ".fasta", ".yml", ".yaml"):
-                msg = (
-                    f"Unable to parse filetype {d.suffix}, "
-                    "please provide a .fasta or .yaml file."
-                )
-                raise RuntimeError(msg)
+        # Find fasta and yaml files in the specified directory
+        data = [path for path in data.glob("*")
+                if path.suffix.lower() in (".fa", ".fas", ".fasta", ".yml", ".yaml")]
     else:
         data = [data]
 
@@ -1045,6 +1034,11 @@ def cli() -> None:
     is_flag=True,
     help=" to dump the s and z embeddings into a npz file. Default is False.",
 )
+@click.option(
+    "--msa_only",
+    is_flag=True,
+    help=" whether to only compute the MSA. Default is False.",
+)
 def predict(  # noqa: C901, PLR0915, PLR0912
     data: str,
     out_dir: str,
@@ -1084,6 +1078,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
     no_kernels: bool = False,
     precision: Optional[str] = None,
     write_embeddings: bool = False,
+    msa_only: bool = False,
 ) -> None:
     """Run predictions with Boltz."""
     # If cpu, write a friendly warning
@@ -1182,6 +1177,9 @@ def predict(  # noqa: C901, PLR0915, PLR0912
         preprocessing_threads=preprocessing_threads,
         max_msa_seqs=max_msa_seqs,
     )
+
+    if msa_only:
+        return
 
     # Load manifest
     manifest = Manifest.load(out_dir / "processed" / "manifest.json")
