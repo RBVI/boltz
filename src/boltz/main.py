@@ -1271,7 +1271,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
     trainer = Trainer(
         default_root_dir=out_dir,
         strategy=strategy,
-        callbacks=[pred_writer],
+        callbacks=[pred_writer, start_prediction_logger(len(filtered_manifest.records))],
         accelerator=accelerator,
         devices=devices,
         precision=precision,
@@ -1430,6 +1430,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
         import sys, time
         sys.stderr.write(f'{time.ctime()}: Starting affinity inference\n')
         trainer.callbacks[0] = pred_writer
+        trainer.callbacks[1] = start_prediction_logger(len(manifest_filtered.records))
         trainer.predict(
             model_module,
             datamodule=data_module,
@@ -1437,6 +1438,22 @@ def predict(  # noqa: C901, PLR0915, PLR0912
         )
         sys.stderr.write(f'{time.ctime()}: Finished affinity inference\n')
 
-
+from pytorch_lightning.callbacks import Callback
+class start_prediction_logger(Callback):
+    def __init__(self, num_predictions):
+        self._num_predictions = num_predictions
+    def on_predict_batch_start(self, trainer, pl_module, batch, batch_idx, dataloader_idx = 0):
+        msg = self._message(pl_module, batch, batch_idx)
+        import sys, time
+        sys.stderr.write(f'{time.ctime()}: Begin {msg}\n')
+    def on_predict_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx = 0):
+        msg = self._message(pl_module, batch, batch_idx)
+        import sys, time
+        sys.stderr.write(f'{time.ctime()}: End {msg}\n')
+    def _message(self, pl_module, batch, batch_idx):
+        itype = 'affinity' if pl_module.affinity_prediction else 'structure'
+        record = batch['record'][0]
+        return f'{itype} inference {record.id} ({batch_idx+1} of {self._num_predictions})'
+    
 if __name__ == "__main__":
     cli()
