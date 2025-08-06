@@ -1810,17 +1810,17 @@ def standardize(smiles: str) -> Optional[str]:
     exclude = exclude_flag(mol, includeRDKitSanitization=False)
 
     if exclude:
-        raise ValueError("Molecule is excluded")
+        raise ValueError(f"Affinity prediction of a ligand given as a SMILES string containing certain elements (e.g. metals) cannot be handled because the ChEMBL structure pipeline library used by Boltz cannot standardize such SMILES strings: {smiles}")
 
     # Standardize with ChEMBL data curation pipeline. During standardization, the molecule may be broken
     # Choose molecule with largest component
     mol = LARGEST_FRAGMENT_CHOOSER.choose(mol)
     # Standardize with ChEMBL data curation pipeline. During standardization, the molecule may be broken
     mol = standardize_mol(mol)
-    smiles = Chem.MolToSmiles(mol)
+    standardized_smiles = Chem.MolToSmiles(mol)
 
     # Check if molecule can be parsed by RDKit (in rare cases, the molecule may be broken during standardization)
-    if Chem.MolFromSmiles(smiles) is None:
-        raise ValueError("Molecule is broken")
+    if Chem.MolFromSmiles(standardized_smiles) is None:
+        raise ValueError(f"Standardizing SMILES {smiles} for affinity prediction failed because standardized SMILES string could not be converted to a molecule by RDKit: RDKit.Chem.MolFromSmiles({standardized_smiles}) returned None.")
 
-    return smiles
+    return standardized_smiles
