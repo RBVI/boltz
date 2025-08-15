@@ -375,6 +375,10 @@ def filter_inputs_affinity(
     """
     click.echo("Checking input data for affinity.")
 
+    # Remove targets that are not predicting affinity
+    if [r for r in manifest.records if not r.affinity]:
+        manifest = Manifest([r for r in manifest.records if r.affinity])
+
     # Get all affinity targets
     existing = {
         r.id
