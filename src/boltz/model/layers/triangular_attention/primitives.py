@@ -26,6 +26,33 @@ from boltz.model.layers.triangular_attention.utils import (
     permute_final_dims,
 )
 
+deepspeed_is_installed = importlib.util.find_spec("deepspeed") is not None
+ds4s_is_installed = (
+    deepspeed_is_installed
+    and importlib.util.find_spec("deepspeed.ops.deepspeed4science") is not None
+)
+if deepspeed_is_installed:
+    import deepspeed
+
+if ds4s_is_installed:
+    from deepspeed.ops.deepspeed4science import DS4Sci_EvoformerAttention
+
+fa_is_installed = importlib.util.find_spec("flash_attn") is not None
+if fa_is_installed:
+    from flash_attn.bert_padding import unpad_input
+    from flash_attn.flash_attn_interface import flash_attn_unpadded_kvpacked_func
+
+trifast_is_installed = importlib.util.find_spec("trifast") is not None
+if trifast_is_installed:
+    #from trifast import triangle_attention
+    from boltz.model.layers.triangular_attention.trifast import triangle_attention
+
+import torch
+from torch import nn
+
+DEFAULT_LMA_Q_CHUNK_SIZE = 1024
+DEFAULT_LMA_KV_CHUNK_SIZE = 4096
+
 
 class Linear(nn.Linear):
     """
@@ -361,6 +388,9 @@ class Attention(nn.Module):
             o = _attention(q, k, v, biases)
             o = o.transpose(-2, -3)
 
+        del q
+        del k
+        del v
         o = self._wrap_up(o, q_x)
 
         return o
@@ -397,10 +427,21 @@ def _trifast_attn(q, k, v, biases):
     # Make mask the right shape.
     mask = rearrange(mask, "b i () () j -> b i j").bool()
 
-    # Delay import to here to avoid initializing cuda too early
-    from trifast import triangle_attention
+    ## Delay import to here to avoid initializing cuda too early
+    #from trifast import triangle_attention
+    if trifast_is_installed:
+        bs, h, _, _, _ = q.shape
+        q = rearrange(q, "b h ... -> (b h) ...").contiguous()
+        k = rearrange(k, "b h ... -> (b h) ...").contiguous()
+        v = rearrange(v, "b h ... -> (b h) ...").contiguous()
+        b = rearrange(b, "b h ... -> (b h) ...").contiguous()
+        mask = mask.contiguous()
+        o = triangle_attention(q, k, v, b, mask)
+        o = rearrange(o, "(b h) ... -> b h ...", h=h, b=bs).contiguous()
+    else:
+        o = triangle_attention(q, k, v, b, mask)
 
-    o = triangle_attention(q, k, v, b, mask)
+    #o = triangle_attention(q, k, v, b, mask)
     o = rearrange(o, "b h i j d -> b i j h d")
 
     # Remove the batch dim if we added it.
