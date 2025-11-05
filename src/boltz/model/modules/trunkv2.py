@@ -780,7 +780,7 @@ class MSALayer(nn.Module):
         # Compute pairwise stack
         z = self.pairformer_layer(
             z, token_mask, chunk_size_transition_z, 
-            chunk_size_tri_attn, triangle_mult_gate_nchunks, use_kernels=use_kernels
+            chunk_size_tri_attn, triangle_mult_gate_nchunks=triangle_mult_gate_nchunks, use_kernels=use_kernels
         )
 
         return z, m
