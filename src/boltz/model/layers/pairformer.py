@@ -73,7 +73,6 @@ class PairformerLayer(nn.Module):
         use_cuequiv_mul: bool = False,
         use_cuequiv_attn: bool = False,
         triangle_mult_gate_nchunks: int = 1,
-        use_kernels: bool = False,
     ) -> tuple[Tensor, Tensor]:
         # Compute pairwise stack
         #dropout = get_dropout_mask(self.dropout, z, self.training)
