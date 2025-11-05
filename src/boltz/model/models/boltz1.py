@@ -347,7 +347,7 @@ class Boltz1(LightningModule):
                         feats["deletion_value"] = feats["deletion_value"].cuda()
                         z_orig = z.cpu()
                         
-                        z = self.msa_module(z, s_inputs, feats, use_trifast=self.use_trifast,
+                        z = self.msa_module(z, s_inputs, feats, use_kernels=self.use_kernels,
                                 chunk_size_transition_z=chunk_size_transition_z, 
                                 chunk_size_transition_msa=chunk_size_transition_msa, 
                                 chunk_size_outer_product=chunk_size_outer_product, 

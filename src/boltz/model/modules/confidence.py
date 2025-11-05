@@ -357,7 +357,7 @@ class ConfidenceModule(nn.Module):
         if self.imitate_trunk:
             #z = z + self.msa_module(z, s_inputs, feats, use_kernels=use_kernels)
             z_orig = z.cpu()
-            z = self.msa_module(z, s_inputs, feats, use_trifast=use_trifast,
+            z = self.msa_module(z, s_inputs, feats, use_kernels=use_kernels,
                     chunk_size_transition_z=chunk_size_transition_z, 
                     chunk_size_transition_msa=chunk_size_transition_msa, 
                     chunk_size_outer_product=chunk_size_outer_product, 
@@ -372,7 +372,7 @@ class ConfidenceModule(nn.Module):
             del s_inputs
 
             #s, z = self.pairformer_module(
-            #    s, z, mask=mask, pair_mask=pair_mask, use_trifast=use_trifast
+            #    s, z, mask=mask, pair_mask=pair_mask, use_kernels=use_kernels
             #)
             s, z = self.pairformer_module(
                 s, z, mask=mask, pair_mask=pair_mask, use_kernels=use_kernels,
@@ -390,7 +390,7 @@ class ConfidenceModule(nn.Module):
             pair_mask = mask[:, :, None] * mask[:, None, :]
 
             #s_t, z_t = self.pairformer_stack(
-            #    s, z, mask=mask, pair_mask=pair_mask, use_trifast=use_trifast
+            #    s, z, mask=mask, pair_mask=pair_mask, use_kernels=use_kernels
             #)
             s_t, z_t = self.pairformer_stack(
                 s, z, mask=mask, pair_mask=pair_mask, use_kernels=use_kernels,

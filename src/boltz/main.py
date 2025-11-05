@@ -1103,7 +1103,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
     chunk_size_tri_attn: int = 128,
     triangle_mult_gate_nchunks: int = 1,
     chunk_size_threshold: int = 384,
-    use_trifast: bool = False,
+    use_kernels: bool = False,
     use_bfloat16: bool = False,
     output_format: Literal["pdb", "mmcif"] = "mmcif",
     num_workers: int = 2,

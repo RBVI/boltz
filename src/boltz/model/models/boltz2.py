@@ -501,7 +501,7 @@ class Boltz2(LightningModule):
                         feats["deletion_value"] = feats["deletion_value"].cuda()
                         
                         #z = z + msa_module(
-                        #    z, s_inputs, feats, use_trifast=self.use_trifast
+                        #    z, s_inputs, feats, use_kernels=self.use_kernels
                         #)
                         z_orig = z.cpu()
                         z = msa_module(
