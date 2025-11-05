@@ -534,7 +534,11 @@ class Boltz2(LightningModule):
                         )
 
             pdistogram = self.distogram_module(z)
-            dict_out = {"pdistogram": pdistogram}
+            dict_out = {
+                "pdistogram": pdistogram,
+                "s": s,
+                "z": z,
+            }
             
             del mask, pair_mask, pdistogram
             dict_out["pdistogram"] = dict_out["pdistogram"].cpu()

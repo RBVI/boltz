@@ -213,7 +213,7 @@ class PairformerModule(nn.Module):
                     pair_mask,
                     chunk_size_transition_z,
                     chunk_size_tri_attn,
-                    triangle_mult_gate_nchunks,
+                    triangle_mult_gate_nchunks=triangle_mult_gate_nchunks,
                     use_kernels=use_kernels,
                 )
             else:
@@ -221,7 +221,7 @@ class PairformerModule(nn.Module):
                     s, z, mask, pair_mask, 
                     chunk_size_transition_z,
                     chunk_size_tri_attn,
-                    triangle_mult_gate_nchunks, 
+                    triangle_mult_gate_nchunks=triangle_mult_gate_nchunks, 
                     use_kernels=use_kernels
                 )
         return s, z
