@@ -171,7 +171,6 @@ class PairformerModule(nn.Module):
         chunk_size_tri_attn: Optional[int] = 128,
         triangle_mult_gate_nchunks: int = 1,
         chunk_size_threshold: int = 384,
-        use_kernels: bool = False,
     ) -> tuple[Tensor, Tensor]:
         """Perform the forward pass.
 
