@@ -39,10 +39,12 @@ class ConfidenceModule(nn.Module):
         return_latent_feats=False,
         conditioning_cutoff_min=None,
         conditioning_cutoff_max=None,
+        use_cpu_memory=False,
         **kwargs,
     ):
         super().__init__()
         self.max_num_atoms_per_token = 23
+        self.use_cpu_memory = use_cpu_memory
         self.no_update_s = pairformer_args.get("no_update_s", False)
         boundaries = torch.linspace(2, max_dist, num_dist_bins - 1)
         self.register_buffer("boundaries", boundaries)
@@ -103,6 +105,7 @@ class ConfidenceModule(nn.Module):
             token_s,
             token_z,
             token_level_confidence=token_level_confidence,
+            use_cpu_memory=use_cpu_memory,
             **confidence_args,
         )
 
@@ -116,23 +119,30 @@ class ConfidenceModule(nn.Module):
         pred_distogram_logits,
         multiplicity=1,
         run_sequentially=False,
-        use_kernels: bool = False,
         chunk_size_transition_z: int = None,
         chunk_size_transition_msa: int = None,
         chunk_size_outer_product: int = None,
         chunk_size_tri_attn: int = None,
         triangle_mult_gate_nchunks: int = 1,
-        chunk_size_threshold: int=384
+        chunk_size_threshold: int=384,
+        use_kernels: bool = False,
     ):
         if run_sequentially and multiplicity > 1:
             assert z.shape[0] == 1, "Not supported with batch size > 1"
             out_dicts = []
-            z_orig = z.cpu()
-            s_orig = s.cpu()
+            z_orig = z
+            s_orig = s
+            if self.use_cpu_memory:
+                z_orig = z_orig.cpu()
+                s_orig = s_orig.cpu()
 
             for sample_idx in range(multiplicity):
-                z = z_orig.cuda()
-                s = s_orig.cuda()
+                if self.use_cpu_memory:
+                    z = z_orig.cuda()
+                    s = s_orig.cuda()
+                else:
+                    z = z_orig
+                    s = s_orig
                 out_dicts.append(  # noqa: PERF401
                     self.forward(
                         s_inputs,
@@ -188,17 +198,19 @@ class ConfidenceModule(nn.Module):
             #relative_position_encoding = self.rel_pos(feats)
             #z = z + relative_position_encoding
             #z = z + self.token_bonds(feats["token_bonds"].float())
-            feats['contact_conditioning'] = feats['contact_conditioning'].cuda()
-            feats['contact_threshold'] = feats['contact_threshold'].cuda()
+            if self.use_cpu_memory:
+                feats['contact_conditioning'] = feats['contact_conditioning'].cuda()
+                feats['contact_threshold'] = feats['contact_threshold'].cuda()
             z += self.rel_pos(feats)
-            z += self.token_bonds(feats["token_bonds"].cuda().float())
+            z += self.token_bonds(feats["token_bonds"].cuda().float() if self.use_cpu_memory else feats["token_bonds"].float())
             if self.bond_type_feature:
                 #z = z + self.token_bonds_type(feats["type_bonds"].long())
-                z += self.token_bonds_type(feats["type_bonds"].cuda().long())
+                z += self.token_bonds_type(feats["type_bonds"].cuda().long() if self.use_cpu_memory else feats["type_bonds"].long())
             #z = z + self.contact_conditioning(feats)
             z += self.contact_conditioning(feats)
-            feats['contact_conditioning'] = feats['contact_conditioning'].cpu()
-            feats['contact_threshold'] = feats['contact_threshold'].cpu()
+            if self.use_cpu_memory:
+                feats['contact_conditioning'] = feats['contact_conditioning'].cpu()
+                feats['contact_threshold'] = feats['contact_threshold'].cpu()
 
         s = s.repeat_interleave(multiplicity, 0)
 
@@ -224,19 +236,20 @@ class ConfidenceModule(nn.Module):
         del l
         s_inputs = s_inputs.repeat_interleave(multiplicity, 0)
 
-        token_to_rep_atom = feats["token_to_rep_atom"].cuda()
+        token_to_rep_atom = feats["token_to_rep_atom"].cuda() if self.use_cpu_memory else feats["token_to_rep_atom"]
         token_to_rep_atom = token_to_rep_atom.repeat_interleave(multiplicity, 0)
         if len(x_pred.shape) == 4:
             B, mult, N, _ = x_pred.shape
             x_pred = x_pred.reshape(B * mult, N, -1)
         else:
             BM, N, _ = x_pred.shape
-        x_pred_repr = torch.bmm(token_to_rep_atom.float(), x_pred.cuda())
+        x_pred_repr = torch.bmm(token_to_rep_atom.float(), (x_pred.cuda() if self.use_cpu_memory else x_pred))
         del token_to_rep_atom
         d = torch.cdist(x_pred_repr, x_pred_repr)
         del x_pred_repr
         distogram = (d.unsqueeze(-1) > self.boundaries).sum(dim=-1).long()
-        d = d.cpu()
+        if self.use_cpu_memory:
+            d = d.cpu()
         distogram = self.dist_bin_pairwise_embed(distogram)
         #z = z + distogram
         z += distogram
@@ -268,19 +281,20 @@ class ConfidenceModule(nn.Module):
             out_dict["z_conf"] = z
 
         # confidence heads
-        feats["msa"] = feats["msa"].cuda()
-        feats["msa_paired"] = feats["msa_paired"].cuda()
-        feats["has_deletion"] = feats["has_deletion"].cuda()
-        feats["deletion_value"] = feats["deletion_value"].cuda()
+        if self.use_cpu_memory:
+            feats["msa"] = feats["msa"].cuda()
+            feats["msa_paired"] = feats["msa_paired"].cuda()
+            feats["has_deletion"] = feats["has_deletion"].cuda()
+            feats["deletion_value"] = feats["deletion_value"].cuda()
         out_dict.update(
             self.confidence_heads(
                 s=s,
                 z=z,
                 x_pred=x_pred,
-                d=d.cuda(),
+                d=(d.cuda() if self.use_cpu_memory else d),
                 feats=feats,
                 multiplicity=multiplicity,
-                pred_distogram_logits=pred_distogram_logits.cuda(),
+                pred_distogram_logits=(pred_distogram_logits.cuda() if self.use_cpu_memory else pred_distogram_logits),
             )
         )
         return out_dict
@@ -296,12 +310,14 @@ class ConfidenceHeads(nn.Module):
         num_pae_bins=64,
         token_level_confidence=True,
         use_separate_heads: bool = False,
+        use_cpu_memory: bool = False,
         **kwargs,
     ):
         super().__init__()
         self.max_num_atoms_per_token = 23
         self.token_level_confidence = token_level_confidence
         self.use_separate_heads = use_separate_heads
+        self.use_cpu_memory = use_cpu_memory
 
         if self.use_separate_heads:
             self.to_pae_intra_logits = LinearNoBias(token_z, num_pae_bins)
@@ -532,7 +548,9 @@ class ConfidenceHeads(nn.Module):
 
         try:
             ptm, iptm, ligand_iptm, protein_iptm, pair_chains_iptm = compute_ptms(
-                pae_logits.cuda(), x_pred.cuda(), feats, multiplicity
+                (pae_logits.cuda() if self.use_cpu_memory else pae_logits),
+                (x_pred.cuda() if self.use_cpu_memory else x_pred),
+                feats, multiplicity
             )
             out_dict["ptm"] = ptm
             out_dict["iptm"] = iptm

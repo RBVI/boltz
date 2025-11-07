@@ -22,12 +22,17 @@ def compute_frame_pred(
     multiplicity,
     resolved_mask=None,
     inference=False,
+    use_cpu_memory=False,
 ):
     with torch.amp.autocast("cuda", enabled=False):
         asym_id_token = feats["asym_id"]
-        asym_id_atom = torch.bmm(
-            #feats["atom_to_token"].float(), asym_id_token.unsqueeze(-1).float()
-            feats["atom_to_token"].cuda().float(), asym_id_token.cuda().unsqueeze(-1).float()
+        if use_cpu_memory:
+            asym_id_atom = torch.bmm(
+                feats["atom_to_token"].cuda().float(), asym_id_token.cuda().unsqueeze(-1).float()
+            ).squeeze(-1)
+        else:
+            asym_id_atom = torch.bmm(
+                feats["atom_to_token"].float(), asym_id_token.unsqueeze(-1).float()
         ).squeeze(-1)
 
     B, N, _ = pred_atom_coords.shape

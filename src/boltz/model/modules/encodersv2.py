@@ -186,8 +186,10 @@ class PairwiseConditioning(Module):
         dim_token_rel_pos_feats,
         num_transitions=2,
         transition_expansion_factor=2,
+        use_cpu_memory=False,
     ):
         super().__init__()
+        self.use_cpu_memory = use_cpu_memory
 
         self.dim_pairwise_init_proj = nn.Sequential(
             nn.LayerNorm(token_z + dim_token_rel_pos_feats),
@@ -211,7 +213,8 @@ class PairwiseConditioning(Module):
         #z = torch.cat((z_trunk, token_rel_pos_feats), dim=-1)
         z = torch.cat((z_trunk["key"], token_rel_pos_feats["key"]), dim=-1)
         token_rel_pos_feats.pop("key")
-        z_trunk["key"] = z_trunk["key"].cpu()
+        if self.use_cpu_memory:
+            z_trunk["key"] = z_trunk["key"].cpu()
 
         z = self.dim_pairwise_init_proj(z)
 

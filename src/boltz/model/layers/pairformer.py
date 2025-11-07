@@ -166,11 +166,11 @@ class PairformerModule(nn.Module):
         z: Tensor,
         mask: Tensor,
         pair_mask: Tensor,
-        use_kernels: bool = False,
         chunk_size_transition_z: int = None,
         chunk_size_tri_attn: Optional[int] = 128,
         triangle_mult_gate_nchunks: int = 1,
         chunk_size_threshold: int = 384,
+        use_kernels: bool = False,
     ) -> tuple[Tensor, Tensor]:
         """Perform the forward pass.
 
@@ -355,14 +355,14 @@ class PairformerNoSeqModule(nn.Module):
                     layer,
                     z,
                     pair_mask,
-                    chunk_size_tri_attn,
-                    use_kernels,
+                    chunk_size_tri_attn=chunk_size_tri_attn,
+                    use_kernels=use_kernels,
                 )
             else:
                 z = layer(
                     z,
                     pair_mask,
-                    chunk_size_tri_attn,
-                    use_kernels,
+                    chunk_size_tri_attn=chunk_size_tri_attn,
+                    use_kernels=use_kernels,
                 )
         return z

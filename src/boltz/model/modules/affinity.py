@@ -44,6 +44,7 @@ class AffinityModule(nn.Module):
         max_dist=22,
         use_cross_transformer: bool = False,
         groups: dict = {},
+        use_cpu_memory: bool = False,
     ):
         super().__init__()
         boundaries = torch.linspace(2, max_dist, num_dist_bins - 1)
@@ -61,6 +62,7 @@ class AffinityModule(nn.Module):
             token_z=token_z,
             dim_token_rel_pos_feats=token_z,
             num_transitions=2,
+            use_cpu_memory=use_cpu_memory,
         )
 
         self.pairformer_stack = PairformerNoSeqModule(token_z, **pairformer_args)

@@ -55,6 +55,7 @@ class DiffusionModule(Module):
         conditioning_transition_layers: int = 2,
         activation_checkpointing: bool = False,
         transformer_post_ln: bool = False,
+        use_cpu_memory: bool = False,
     ) -> None:
         super().__init__()
 
@@ -198,9 +199,11 @@ class AtomDiffusion(Module):
         compile_score: bool = False,
         alignment_reverse_diff: bool = False,
         synchronize_sigmas: bool = False,
+        use_cpu_memory: bool = False,
     ):
         super().__init__()
         self.score_model = DiffusionModule(
+            use_cpu_memory=use_cpu_memory,
             **score_model_args,
         )
         if compile_score:

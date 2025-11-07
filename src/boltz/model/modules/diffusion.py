@@ -61,6 +61,7 @@ class DiffusionModule(Module):
         conditioning_transition_layers: int = 2,
         activation_checkpointing: bool = False,
         offload_to_cpu: bool = False,
+        use_cpu_memory: bool = False,
         **kwargs,
     ) -> None:
         """Initialize the diffusion module.
@@ -121,6 +122,7 @@ class DiffusionModule(Module):
             token_z=token_z,
             dim_token_rel_pos_feats=token_z,
             num_transitions=conditioning_transition_layers,
+            use_cpu_memory=use_cpu_memory,
         )
 
         self.atom_attention_encoder = AtomAttentionEncoder(
@@ -308,6 +310,7 @@ class AtomDiffusion(Module):
         synchronize_sigmas=False,
         use_inference_model_cache=False,
         accumulate_token_repr=False,
+        use_cpu_memory=False,
         **kwargs,
     ):
         """Initialize the atom diffusion module.
@@ -354,6 +357,7 @@ class AtomDiffusion(Module):
         """
         super().__init__()
         self.score_model = DiffusionModule(
+            use_cpu_memory=use_cpu_memory,
             **score_model_args,
         )
         if compile_score:

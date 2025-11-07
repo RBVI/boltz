@@ -435,6 +435,7 @@ class ConnectionsPotential(FlatBottomPotential, DistancePotential):
 
 
 class VDWOverlapPotential(FlatBottomPotential, DistancePotential):
+    use_cpu_memory = False
     def compute_args(self, feats, parameters):
         atom_chain_id = (
             torch.bmm(
@@ -453,8 +454,9 @@ class VDWOverlapPotential(FlatBottomPotential, DistancePotential):
         vdw_radii[1:119] = torch.tensor(
             const.vdw_radii, dtype=torch.float32, device=atom_chain_id.device
         )
+        ref_elem = feats["ref_element"].cuda().float() if self.use_cpu_memory else feats["ref_element"].float()
         atom_vdw_radii = (
-            feats["ref_element"].cuda().float() @ vdw_radii.unsqueeze(-1)
+            ref_elem @ vdw_radii.unsqueeze(-1)
         ).squeeze(-1)[0]
 
         pair_index = torch.triu_indices(

@@ -1080,6 +1080,11 @@ def cli() -> None:
     is_flag=True,
     help=" to dump the s and z embeddings into a npz file. Default is False.",
 )
+@click.option(
+    "--use_cpu_memory",
+    is_flag=True,
+    help="Whether to reduce GPU memory use by transfering some low-use tensors from CUDA GPU memory to CPU memory to allow predicting larger structures.",
+)
 def predict(  # noqa: C901, PLR0915, PLR0912
     data: str,
     out_dir: str,
@@ -1126,6 +1131,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
     num_subsampled_msa: int = 1024,
     no_kernels: bool = False,
     write_embeddings: bool = False,
+    use_cpu_memory: bool = False,
 ) -> None:
     """Run predictions with Boltz."""
     # If cpu, write a friendly warning
@@ -1377,6 +1383,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
             pairformer_args=asdict(pairformer_args),
             msa_args=asdict(msa_args),
             steering_args=asdict(steering_args),
+            use_cpu_memory=use_cpu_memory,
         )
         model_module.eval()
         

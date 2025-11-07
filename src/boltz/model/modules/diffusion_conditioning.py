@@ -30,6 +30,7 @@ class DiffusionConditioning(Module):
         use_no_atom_char: bool = False,
         use_atom_backbone_feat: bool = False,
         use_residue_feats_atoms: bool = False,
+        use_cpu_memory: bool = False,
     ) -> None:
         super().__init__()
 
@@ -37,6 +38,7 @@ class DiffusionConditioning(Module):
             token_z=token_z,
             dim_token_rel_pos_feats=token_z,
             num_transitions=conditioning_transition_layers,
+            use_cpu_memory=use_cpu_memory,
         )
 
         self.atom_encoder = AtomEncoder(

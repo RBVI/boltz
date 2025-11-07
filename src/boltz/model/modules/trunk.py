@@ -131,6 +131,7 @@ class MSAModule(nn.Module):
         offload_to_cpu: bool = False,
         subsample_msa: bool = False,
         num_subsampled_msa: int = 1024,
+        use_cpu_memory: bool = False,
         **kwargs,
     ) -> None:
         """Initialize the MSA module.
@@ -168,6 +169,7 @@ class MSAModule(nn.Module):
         self.use_paired_feature = use_paired_feature
         self.subsample_msa = subsample_msa
         self.num_subsampled_msa = num_subsampled_msa
+        self.use_cpu_memory = use_cpu_memory
 
         self.s_proj = nn.Linear(s_input_dim, msa_s, bias=False)
         self.msa_proj = nn.Linear(
@@ -208,13 +210,13 @@ class MSAModule(nn.Module):
         z: Tensor,
         emb: Tensor,
         feats: dict[str, Tensor],
-        use_kernels: bool = False,
         chunk_size_transition_z: int = 64,
         chunk_size_transition_msa: int = 32,
         chunk_size_outer_product: int = 4,
         chunk_size_tri_attn: int = 128,
         triangle_mult_gate_nchunks: int = 1,
-        chunk_size_threshold: int = 384
+        chunk_size_threshold: int = 384,
+        use_kernels: bool = False,
     ) -> Tensor:
         """Perform the forward pass.
 
@@ -261,7 +263,10 @@ class MSAModule(nn.Module):
         has_deletion = feats["has_deletion"].unsqueeze(-1)
         deletion_value = feats["deletion_value"].unsqueeze(-1)
         is_paired = feats["msa_paired"].unsqueeze(-1)
-        msa_mask = feats["msa_mask"].cuda()
+        if self.use_cpu_memory:
+            msa_mask = feats["msa_mask"].cuda()
+        else:
+            msa_mask = feats["msa_mask"]
         token_mask = feats["token_pad_mask"].float()
         token_mask = token_mask[:, :, None] * token_mask[:, None, :]
 
@@ -283,10 +288,11 @@ class MSAModule(nn.Module):
         #m = m + self.s_proj(emb).unsqueeze(1)
         m += self.s_proj(emb).unsqueeze(1)
 
-        feats["msa"] = feats["msa"].cpu()
-        feats["msa_paired"] = feats["msa_paired"].cpu()
-        feats["has_deletion"] = feats["has_deletion"].cpu()
-        feats["deletion_value"] = feats["deletion_value"].cpu()
+        if self.use_cpu_memory:
+            feats["msa"] = feats["msa"].cpu()
+            feats["msa_paired"] = feats["msa_paired"].cpu()
+            feats["has_deletion"] = feats["has_deletion"].cpu()
+            feats["deletion_value"] = feats["deletion_value"].cpu()
         del has_deletion, deletion_value, is_paired
 
         # Perform MSA blocks
