@@ -1091,6 +1091,11 @@ def cli() -> None:
     is_flag=True,
     help="Whether to reduce GPU memory use by transfering some low-use tensors from CUDA GPU memory to CPU memory to allow predicting larger structures.",
 )
+@click.option(
+    "--aggressive_chunking",
+    is_flag=True,
+    help="Whether to set chunking parametesr chunk_size_transition_z = 32, chunk_size_tri_attn = 64, triangle_mult_gate_nchunks = 4 to reduce GPU memory use to allow predicting larger structures.",
+)
 def predict(  # noqa: C901, PLR0915, PLR0912
     data: str,
     out_dir: str,
@@ -1138,6 +1143,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
     no_kernels: bool = False,
     write_embeddings: bool = False,
     use_cpu_memory: bool = False,
+    aggressive_chunking: bool = False,
 ) -> None:
     """Run predictions with Boltz."""
     # If cpu, write a friendly warning
@@ -1356,6 +1362,12 @@ def predict(  # noqa: C901, PLR0915, PLR0912
                 checkpoint = cache / "boltz2_conf.ckpt"
             else:
                 checkpoint = cache / "boltz1_conf.ckpt"
+
+        # Reduce memory use at the expense of slower computation.
+        if aggressive_chunking:
+            chunk_size_transition_z = 32
+            chunk_size_tri_attn = 64
+            triangle_mult_gate_nchunks = 4
 
         predict_args = {
             "recycling_steps": recycling_steps,
