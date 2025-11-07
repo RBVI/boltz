@@ -12,7 +12,13 @@ from pathlib import Path
 from typing import Literal, Optional
 
 import click
+
+# Use expandable segments CUDA memory allocation to reduce fragmentation
+# and allow prediction of larger structures.
+if "PYTORCH_CUDA_ALLOC_CONF" not in os.environ:
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import torch
+
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.strategies import DDPStrategy
 from pytorch_lightning.utilities import rank_zero_only
