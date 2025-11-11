@@ -78,6 +78,7 @@ class Boltz1(LightningModule):
         steering_args: Optional[dict[str, Any]] = None,
         use_kernels: bool = False,
         use_cpu_memory: bool = False,
+        inplace_operations: bool = False,
     ) -> None:
         super().__init__()
 
@@ -144,6 +145,7 @@ class Boltz1(LightningModule):
         self.use_kernels = use_kernels
 
         self.use_cpu_memory = use_cpu_memory
+        self.inplace_operations = inplace_operations
         
         self.nucleotide_rmsd_weight = nucleotide_rmsd_weight
         self.ligand_rmsd_weight = ligand_rmsd_weight
@@ -194,9 +196,12 @@ class Boltz1(LightningModule):
                 token_z=token_z,
                 s_input_dim=s_input_dim,
                 use_cpu_memory=use_cpu_memory,
+                inplace_operations=inplace_operations,
                 **msa_args,
             )
-        self.pairformer_module = PairformerModule(token_s, token_z, **pairformer_args)
+        self.pairformer_module = PairformerModule(token_s, token_z,
+                                                  inplace_operations=inplace_operations,
+                                                  **pairformer_args)
         if compile_pairformer:
             # Big models hit the default cache limit (8)
             self.is_pairformer_compiled = True
@@ -228,6 +233,7 @@ class Boltz1(LightningModule):
             compile_score=compile_structure,
             accumulate_token_repr=use_accumulate_token_repr,
             use_cpu_memory=use_cpu_memory,
+            inplace_operations=inplace_operations,
             **diffusion_process_args,
         )
         self.distogram_module = DistogramModule(token_z, num_bins)
@@ -247,6 +253,7 @@ class Boltz1(LightningModule):
                     full_embedder_args=full_embedder_args,
                     msa_args=msa_args,
                     use_cpu_memory=use_cpu_memory,
+                    inplace_operations=inplace_operations,
                     **confidence_model_args,
                 )
             else:
@@ -255,6 +262,7 @@ class Boltz1(LightningModule):
                     token_z,
                     compute_pae=alpha_pae > 0,
                     use_cpu_memory=use_cpu_memory,
+                    inplace_operations=inplace_operations,
                     **confidence_model_args,
                 )
             if compile_confidence:
@@ -316,11 +324,13 @@ class Boltz1(LightningModule):
                 self.z_init_1(s_inputs)[:, :, None]
                 + self.z_init_2(s_inputs)[:, None, :]
             )
-            #relative_position_encoding = self.rel_pos(feats)
-            #z_init = z_init + relative_position_encoding
-            #z_init = z_init + self.token_bonds(feats["token_bonds"].float())
-            z_init += self.rel_pos(feats)
-            z_init += self.token_bonds(feats["token_bonds"].float())
+            if self.inplace_operations:
+                z_init += self.rel_pos(feats)
+                z_init += self.token_bonds(feats["token_bonds"].float())
+            else:
+                relative_position_encoding = self.rel_pos(feats)
+                z_init = z_init + relative_position_encoding
+                z_init = z_init + self.token_bonds(feats["token_bonds"].float())
             if self.use_cpu_memory:
                 feats["token_bonds"] = feats["token_bonds"].cpu()
 
@@ -372,9 +382,15 @@ class Boltz1(LightningModule):
                                 chunk_size_threshold=chunk_size_threshold
                             )
                         if self.use_cpu_memory:
-                            z += z_orig.cuda() #Surprisingly the skip connection barely impacts output quality
+                            if self.inplace_operations:
+                                z += z_orig.cuda() #Surprisingly the skip connection barely impacts output quality
+                            else:
+                                z = z + z_orig.cuda()
                         else:
-                            z += z_orig
+                            if self.inplace_operations:
+                                z += z_orig
+                            else:
+                                z = z + z_orig
                         #z = z + self.msa_module(
                         #    z, s_inputs, feats, use_kernels=self.use_kernels
                         #)

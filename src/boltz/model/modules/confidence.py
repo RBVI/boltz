@@ -37,7 +37,8 @@ class ConfidenceModule(nn.Module):
         full_embedder_args: dict = None,
         msa_args: dict = None,
         compile_pairformer=False,
-        use_cpu_memory = False,
+        use_cpu_memory=False,
+        inplace_operations: bool = False,
     ):
         """Initialize the confidence module.
 
@@ -87,7 +88,8 @@ class ConfidenceModule(nn.Module):
         )
 
         self.use_cpu_memory = use_cpu_memory
-
+        self.inplace_operations = inplace_operations
+        
         self.use_s_diffusion = use_s_diffusion
         if use_s_diffusion:
             self.s_diffusion_norm = nn.LayerNorm(2 * token_s)
@@ -135,11 +137,13 @@ class ConfidenceModule(nn.Module):
                 token_z=token_z,
                 s_input_dim=s_input_dim,
                 use_cpu_memory=use_cpu_memory,
+                inplace_operations=inplace_operations,
                 **msa_args,
             )
             self.pairformer_module = PairformerModule(
                 token_s,
                 token_z,
+                inplace_operations=inplace_operations,
                 **pairformer_args,
             )
             if compile_pairformer:
@@ -174,6 +178,7 @@ class ConfidenceModule(nn.Module):
             self.pairformer_stack = PairformerModule(
                 token_s,
                 token_z,
+                inplace_operations=inplace_operations,
                 **pairformer_args,
             )
 
@@ -275,27 +280,38 @@ class ConfidenceModule(nn.Module):
             s_init = self.s_init(s_inputs)
             l = self.z_norm(z)
             l = self.z_recycle(l)
-            z.copy_(l)
-            del(l)
 
-            #z_init = (
-            z += (
-                self.z_init_1(s_inputs)[:, :, None]
-                + self.z_init_2(s_inputs)[:, None, :]
-            )
-            #relative_position_encoding = self.rel_pos(feats)
-            #z_init = z_init + relative_position_encoding
-            #z_init = z_init + self.token_bonds(feats["token_bonds"].float())
-            z += self.rel_pos(feats)
-            if self.use_cpu_memory:
-                feats["token_bonds"] = feats["token_bonds"].cuda()
-            z += self.token_bonds(feats["token_bonds"].float())
-            if self.use_cpu_memory:
-                feats["token_bonds"] = feats["token_bonds"].cpu()
+            if self.inplace_operations:
+                z.copy_(l)
+                del(l)
+
+                z += (
+                    self.z_init_1(s_inputs)[:, :, None]
+                    + self.z_init_2(s_inputs)[:, None, :]
+                )
+
+                z += self.rel_pos(feats)
+
+                if self.use_cpu_memory:
+                    feats["token_bonds"] = feats["token_bonds"].cuda()
+                z += self.token_bonds(feats["token_bonds"].float())
+                if self.use_cpu_memory:
+                    feats["token_bonds"] = feats["token_bonds"].cpu()
+            else:
+                z = l
+
+                z_init = (
+                    self.z_init_1(s_inputs)[:, :, None]
+                    + self.z_init_2(s_inputs)[:, None, :]
+                )
+
+                relative_position_encoding = self.rel_pos(feats)
+                z_init = z_init + relative_position_encoding
+                z_init = z_init + self.token_bonds(feats["token_bonds"].float())
 
             # Apply recycling
+            z = z_init + self.z_recycle(self.z_norm(z))
             s = s_init + self.s_recycle(self.s_norm(s))
-            #z = z_init + self.z_recycle(self.z_norm(z))
 
         else:
             s_inputs = self.s_inputs_norm(s_inputs).repeat_interleave(multiplicity, 0)
@@ -303,17 +319,21 @@ class ConfidenceModule(nn.Module):
                 s = self.s_norm(s)
 
             if self.add_s_input_to_s:
-                #s = s + self.s_input_to_s(s_inputs)
-                s += self.s_input_to_s(s_inputs)
+                if self.inplace_operations:
+                    s += self.s_input_to_s(s_inputs)
+                else:
+                    s = s + self.s_input_to_s(s_inputs)
 
             z = self.z_norm(z)
 
             if self.add_z_input_to_z:
-                #relative_position_encoding = self.rel_pos(feats)
-                #z = z + relative_position_encoding
-                #z = z + self.token_bonds(feats["token_bonds"].float())
-                z += self.rel_pos(feats)
-                z += self.token_bonds(feats["token_bonds"].float())
+                if self.inplace_operations:
+                    z += self.rel_pos(feats)
+                    z += self.token_bonds(feats["token_bonds"].float())
+            else:
+                relative_position_encoding = self.rel_pos(feats)
+                z = z + relative_position_encoding
+                z = z + self.token_bonds(feats["token_bonds"].float())
 
         s = s.repeat_interleave(multiplicity, 0)
 
@@ -322,25 +342,32 @@ class ConfidenceModule(nn.Module):
             s_diffusion = self.s_diffusion_norm(s_diffusion)
             s = s + self.s_diffusion_to_s(s_diffusion)
             del s_diffusion
+        if self.inplace_operations:
+            l = z.repeat_interleave(multiplicity, 0)
+            z.copy_(l)
+            del l
+            z += self.s_to_z(s_inputs)[:, :, None, :]
+            z += self.s_to_z_transpose(s_inputs)[:, None, :, :]
+        else:
+            z = z.repeat_interleave(multiplicity, 0)
+            z = (
+                z
+                + self.s_to_z(s_inputs)[:, :, None, :]
+                + self.s_to_z_transpose(s_inputs)[:, None, :, :]
+            )
 
-        #z = z.repeat_interleave(multiplicity, 0)
-        #z = (
-        #    z
-        #    + self.s_to_z(s_inputs)[:, :, None, :]
-        #    + self.s_to_z_transpose(s_inputs)[:, None, :, :]
-        #)
-        l = z.repeat_interleave(multiplicity, 0)
-        z.copy_(l)
-        del l
-        z += self.s_to_z(s_inputs)[:, :, None, :]
-        z += self.s_to_z_transpose(s_inputs)[:, None, :, :]
 
         if self.add_s_to_z_prod:
-            #z = z + self.s_to_z_prod_out(
-            z += self.s_to_z_prod_out(
-                self.s_to_z_prod_in1(s_inputs)[:, :, None, :]
-                * self.s_to_z_prod_in2(s_inputs)[:, None, :, :]
-            )
+            if self.inplace_operations:
+                z += self.s_to_z_prod_out(
+                    self.s_to_z_prod_in1(s_inputs)[:, :, None, :]
+                    * self.s_to_z_prod_in2(s_inputs)[:, None, :, :]
+                )
+            else:
+                z = z + self.s_to_z_prod_out(
+                    self.s_to_z_prod_in1(s_inputs)[:, :, None, :]
+                    * self.s_to_z_prod_in2(s_inputs)[:, None, :, :]
+                )
 
         token_to_rep_atom = feats["token_to_rep_atom"].cuda() if self.use_cpu_memory else feats["token_to_rep_atom"]
         token_to_rep_atom = token_to_rep_atom.repeat_interleave(multiplicity, 0)
@@ -359,8 +386,10 @@ class ConfidenceModule(nn.Module):
             d = d.cpu()
         distogram = self.dist_bin_pairwise_embed(distogram)
 
-        #z = z + distogram
-        z += distogram
+        if self.inplace_operations:
+            z += distogram
+        else:
+            z = z + distogram
         del distogram
 
         #mask = feats["token_pad_mask"].repeat_interleave(multiplicity, 0)
@@ -386,9 +415,15 @@ class ConfidenceModule(nn.Module):
                     chunk_size_threshold=chunk_size_threshold
                 )
             if self.use_cpu_memory:
-                z += z_orig.cuda()
+                if self.inplace_operations:
+                    z += z_orig.cuda()
+                else:
+                    z = z + z_orig.cuda()
             else:
-                z += z_orig
+                if self.inplace_operations:
+                    z += z_orig
+                else:
+                    z = z + z_orig
 
             mask = feats["token_pad_mask"].repeat_interleave(multiplicity, 0)
             pair_mask = mask[:, :, None] * mask[:, None, :]
@@ -404,9 +439,12 @@ class ConfidenceModule(nn.Module):
                 triangle_mult_gate_nchunks=triangle_mult_gate_nchunks,
                 chunk_size_threshold=chunk_size_threshold)
 
-            #s, z = self.final_s_norm(s), self.final_z_norm(z)
-            s, lz = self.final_s_norm(s), self.final_z_norm(z)
-            z.copy_(lz)
+            if self.inplace_operations:
+                s, lz = self.final_s_norm(s), self.final_z_norm(z)
+                z.copy_(lz)
+                del lz
+            else:
+                s, z = self.final_s_norm(s), self.final_z_norm(z)
 
         else:
             mask = feats["token_pad_mask"].repeat_interleave(multiplicity, 0)

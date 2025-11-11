@@ -45,6 +45,7 @@ class AffinityModule(nn.Module):
         use_cross_transformer: bool = False,
         groups: dict = {},
         use_cpu_memory: bool = False,
+        inplace_operations: bool = False,
     ):
         super().__init__()
         boundaries = torch.linspace(2, max_dist, num_dist_bins - 1)
@@ -63,9 +64,12 @@ class AffinityModule(nn.Module):
             dim_token_rel_pos_feats=token_z,
             num_transitions=2,
             use_cpu_memory=use_cpu_memory,
+            inplace_operations=inplace_operations,
         )
 
-        self.pairformer_stack = PairformerNoSeqModule(token_z, **pairformer_args)
+        self.pairformer_stack = PairformerNoSeqModule(token_z,
+                                                      inplace_operations=inplace_operations,
+                                                      **pairformer_args)
         self.affinity_heads = AffinityHeadsTransformer(
             token_z,
             transformer_args["token_s"],
@@ -75,7 +79,8 @@ class AffinityModule(nn.Module):
             False,
             groups=groups,
         )
-
+        self.inplace_operations = inplace_operations
+        
     def forward(
         self,
         s_inputs,

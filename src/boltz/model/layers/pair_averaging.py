@@ -14,6 +14,7 @@ class PairWeightedAveraging(nn.Module):
         c_h: int,
         num_heads: int,
         inf: float = 1e6,
+        inplace_operations: bool = False,
     ) -> None:
         """Initialize the pair weighted averaging layer.
 
@@ -37,6 +38,7 @@ class PairWeightedAveraging(nn.Module):
         self.c_h = c_h
         self.num_heads = num_heads
         self.inf = inf
+        self.inplace_operations = inplace_operations
 
         self.norm_m = nn.LayerNorm(c_m)
         self.norm_z = nn.LayerNorm(c_z)
@@ -100,8 +102,10 @@ class PairWeightedAveraging(nn.Module):
                 b: Tensor = z @ sliced_weight_proj_z.T
                 del sliced_weight_proj_z
                 b = b.permute(0, 3, 1, 2)
-                #b = b + (1 - mask[:, None]) * -self.inf
-                b += (1 - mask[:, None]) * -self.inf
+                if self.inplace_operations:
+                    b += (1 - mask[:, None]) * -self.inf
+                else:
+                    b = b + (1 - mask[:, None]) * -self.inf
                 w = torch.softmax(b, dim=-1)
                 del b
 
@@ -120,8 +124,10 @@ class PairWeightedAveraging(nn.Module):
                 del v
                 o = o.permute(0, 2, 3, 1, 4)
                 o = o.reshape(*o.shape[:3], 1 * self.c_h)
-                #o_chunks = g * o
-                o *= g
+                if self.inplace_operations:
+                    o *= g
+                else:
+                    o_chunks = g * o
                 del g
 
                 sliced_weight_proj_o = self.proj_o.weight[
@@ -129,11 +135,15 @@ class PairWeightedAveraging(nn.Module):
                 ]
 
                 if head_idx == 0:
-                    #o_out = o_chunks @ sliced_weight_proj_o.T
-                    o_out = o @ sliced_weight_proj_o.T
+                    if self.inplace_operations:
+                        o_out = o @ sliced_weight_proj_o.T
+                    else:
+                        o_out = o_chunks @ sliced_weight_proj_o.T
                 else:
-                    #o_out += o_chunks @ sliced_weight_proj_o.T
-                    o_out += o @ sliced_weight_proj_o.T
+                    if self.inplace_operations:
+                        o_out += o @ sliced_weight_proj_o.T
+                    else:
+                        o_out += o_chunks @ sliced_weight_proj_o.T
                 del sliced_weight_proj_o
             return o_out
         else:

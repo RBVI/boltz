@@ -31,6 +31,7 @@ class PairformerLayer(nn.Module):
         pairwise_num_heads: int = 4,
         post_layer_norm: bool = False,
         v2: bool = False,
+        inplace_operations: bool = False,
     ) -> None:
         super().__init__()
         self.token_z = token_z
@@ -44,8 +45,8 @@ class PairformerLayer(nn.Module):
         else:
             self.attention = AttentionPairBias(token_s, token_z, num_heads)
 
-        self.tri_mul_out = TriangleMultiplicationOutgoing(token_z)
-        self.tri_mul_in = TriangleMultiplicationIncoming(token_z)
+        self.tri_mul_out = TriangleMultiplicationOutgoing(token_z, inplace_operations=inplace_operations)
+        self.tri_mul_in = TriangleMultiplicationIncoming(token_z, inplace_operations=inplace_operations)
 
         self.tri_att_start = TriangleAttentionStartingNode(
             token_z, pairwise_head_width, pairwise_num_heads, inf=1e9
@@ -61,6 +62,9 @@ class PairformerLayer(nn.Module):
             nn.LayerNorm(token_s) if self.post_layer_norm else nn.Identity()
         )
 
+        # Allow modifying tensors in place
+        self.inplace_operations = inplace_operations
+
     def forward(
         self,
         s: Tensor,
@@ -75,38 +79,54 @@ class PairformerLayer(nn.Module):
         triangle_mult_gate_nchunks: int = 1,
     ) -> tuple[Tensor, Tensor]:
         # Compute pairwise stack
-        #dropout = get_dropout_mask(self.dropout, z, self.training)
-        #z = z + dropout * self.tri_mul_out(z, mask=pair_mask)
-        get_dropout_mask(self.dropout, z, self.training)
-        z += self.tri_mul_out(z, mask=pair_mask, triangle_mult_gate_nchunks=triangle_mult_gate_nchunks)
+        if self.inplace_operations:
+            get_dropout_mask(self.dropout, z, self.training)
+            z += self.tri_mul_out(z, mask=pair_mask, triangle_mult_gate_nchunks=triangle_mult_gate_nchunks)
 
-        #dropout = get_dropout_mask(self.dropout, z, self.training)
-        #z = z + dropout * self.tri_mul_in(z, mask=pair_mask)
-        get_dropout_mask(self.dropout, z, self.training)
-        z += self.tri_mul_in(z, mask=pair_mask, triangle_mult_gate_nchunks=triangle_mult_gate_nchunks)
+            get_dropout_mask(self.dropout, z, self.training)
+            z += self.tri_mul_in(z, mask=pair_mask, triangle_mult_gate_nchunks=triangle_mult_gate_nchunks)
 
-        #dropout = get_dropout_mask(self.dropout, z, self.training)
-        #z = z + dropout * self.tri_att_start(
-        get_dropout_mask(self.dropout, z, self.training)
-        z += self.tri_att_start(
-            z,
-            mask=pair_mask,
-            chunk_size=chunk_size_tri_attn,
-            use_kernels=use_cuequiv_attn or use_kernels,
-        )
+            get_dropout_mask(self.dropout, z, self.training)
+            z += self.tri_att_start(
+                z,
+                mask=pair_mask,
+                chunk_size=chunk_size_tri_attn,
+                use_kernels=use_cuequiv_attn or use_kernels,
+            )
 
-        #dropout = get_dropout_mask(self.dropout, z, self.training, columnwise=True)
-        #z = z + dropout * self.tri_att_end(
-        get_dropout_mask(self.dropout, z, self.training, columnwise=True)
-        z += self.tri_att_end(
-            z,
-            mask=pair_mask,
-            chunk_size=chunk_size_tri_attn,
-            use_kernels=use_cuequiv_attn or use_kernels,
-        )
+            get_dropout_mask(self.dropout, z, self.training, columnwise=True)
+            z += self.tri_att_end(
+                z,
+                mask=pair_mask,
+                chunk_size=chunk_size_tri_attn,
+                use_kernels=use_cuequiv_attn or use_kernels,
+            )
 
-        #z = z + self.transition_z(z)
-        z += self.transition_z(z, chunk_size_transition_z)
+            z += self.transition_z(z, chunk_size_transition_z)
+        else:
+            dropout = get_dropout_mask(self.dropout, z, self.training)
+            z = z + dropout * self.tri_mul_out(z, mask=pair_mask)
+
+            dropout = get_dropout_mask(self.dropout, z, self.training)
+            z = z + dropout * self.tri_mul_in(z, mask=pair_mask)
+
+            dropout = get_dropout_mask(self.dropout, z, self.training)
+            z = z + dropout * self.tri_att_start(
+                z,
+                mask=pair_mask,
+                chunk_size=chunk_size_tri_attn,
+                use_kernels=use_cuequiv_attn or use_kernels,
+            )
+
+            dropout = get_dropout_mask(self.dropout, z, self.training, columnwise=True)
+            z = z + dropout * self.tri_att_end(
+                z,
+                mask=pair_mask,
+                chunk_size=chunk_size_tri_attn,
+                use_kernels=use_cuequiv_attn or use_kernels,
+            )
+
+            z = z + self.transition_z(z)
 
         # Compute sequence stack
         with torch.autocast("cuda", enabled=False):
@@ -135,6 +155,7 @@ class PairformerModule(nn.Module):
         post_layer_norm: bool = False,
         activation_checkpointing: bool = False,
         v2: bool = False,
+        inplace_operations: bool = False,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -144,6 +165,7 @@ class PairformerModule(nn.Module):
         self.num_heads = num_heads
         self.post_layer_norm = post_layer_norm
         self.activation_checkpointing = activation_checkpointing
+        self.inplace_operations = inplace_operations
 
         self.layers = nn.ModuleList()
         for _ in range(num_blocks):
@@ -157,6 +179,7 @@ class PairformerModule(nn.Module):
                     pairwise_num_heads,
                     post_layer_norm,
                     v2,
+                    inplace_operations=inplace_operations,
                 ),
             )
 
@@ -237,14 +260,16 @@ class PairformerNoSeqLayer(nn.Module):
         pairwise_head_width: int = 32,
         pairwise_num_heads: int = 4,
         post_layer_norm: bool = False,
+        inplace_operations: bool = False,
     ) -> None:
         super().__init__()
         self.token_z = token_z
         self.dropout = dropout
         self.post_layer_norm = post_layer_norm
+        self.inplace_operations = inplace_operations
 
-        self.tri_mul_out = TriangleMultiplicationOutgoing(token_z)
-        self.tri_mul_in = TriangleMultiplicationIncoming(token_z)
+        self.tri_mul_out = TriangleMultiplicationOutgoing(token_z, inplace_operations=inplace_operations)
+        self.tri_mul_in = TriangleMultiplicationIncoming(token_z, inplace_operations=inplace_operations)
 
         self.tri_att_start = TriangleAttentionStartingNode(
             token_z, pairwise_head_width, pairwise_num_heads, inf=1e9
@@ -267,38 +292,55 @@ class PairformerNoSeqLayer(nn.Module):
         triangle_mult_gate_nchunks: int = 1,
     ) -> Tensor:
         # Compute pairwise stack
-        #dropout = get_dropout_mask(self.dropout, z, self.training)
-        #z = z + dropout * self.tri_mul_out(z, mask=pair_mask)
-        get_dropout_mask(self.dropout, z, self.training)
-        z += self.tri_mul_out(z, mask=pair_mask, triangle_mult_gate_nchunks=triangle_mult_gate_nchunks)
+        if self.inplace_operations:
+            get_dropout_mask(self.dropout, z, self.training)
+            z += self.tri_mul_out(z, mask=pair_mask, triangle_mult_gate_nchunks=triangle_mult_gate_nchunks)
 
-        #dropout = get_dropout_mask(self.dropout, z, self.training)
-        #z = z + dropout * self.tri_mul_in(z, mask=pair_mask)
-        get_dropout_mask(self.dropout, z, self.training)
-        z += self.tri_mul_in(z, mask=pair_mask, triangle_mult_gate_nchunks=triangle_mult_gate_nchunks)
+            get_dropout_mask(self.dropout, z, self.training)
+            z += self.tri_mul_in(z, mask=pair_mask, triangle_mult_gate_nchunks=triangle_mult_gate_nchunks)
 
-        #dropout = get_dropout_mask(self.dropout, z, self.training)
-        #z = z + dropout * self.tri_att_start(
-        get_dropout_mask(self.dropout, z, self.training)
-        z += self.tri_att_start(
-            z,
-            mask=pair_mask,
-            chunk_size=chunk_size_tri_attn,
-            use_kernels=use_cuequiv_attn or use_kernels,
-        )
+            get_dropout_mask(self.dropout, z, self.training)
+            z += self.tri_att_start(
+                z,
+                mask=pair_mask,
+                chunk_size=chunk_size_tri_attn,
+                use_kernels=use_cuequiv_attn or use_kernels,
+            )
 
-        #dropout = get_dropout_mask(self.dropout, z, self.training, columnwise=True)
-        #z = z + dropout * self.tri_att_end(
-        get_dropout_mask(self.dropout, z, self.training, columnwise=True)
-        z += self.tri_att_end(
-            z,
-            mask=pair_mask,
-            chunk_size=chunk_size_tri_attn,
-            use_kernels=use_cuequiv_attn or use_kernels,
-        )
+            get_dropout_mask(self.dropout, z, self.training, columnwise=True)
+            z += self.tri_att_end(
+                z,
+                mask=pair_mask,
+                chunk_size=chunk_size_tri_attn,
+                use_kernels=use_cuequiv_attn or use_kernels,
+            )
 
-        #z = z + self.transition_z(z)
-        z += self.transition_z(z, chunk_size_transition_z)
+            z += self.transition_z(z, chunk_size_transition_z)
+        else:
+            dropout = get_dropout_mask(self.dropout, z, self.training)
+            z = z + dropout * self.tri_mul_out(z, mask=pair_mask)
+
+            dropout = get_dropout_mask(self.dropout, z, self.training)
+            z = z + dropout * self.tri_mul_in(z, mask=pair_mask)
+
+            dropout = get_dropout_mask(self.dropout, z, self.training)
+            z = z + dropout * self.tri_att_start(
+                z,
+                mask=pair_mask,
+                chunk_size=chunk_size_tri_attn,
+                use_kernels=use_cuequiv_attn or use_kernels,
+            )
+
+            dropout = get_dropout_mask(self.dropout, z, self.training, columnwise=True)
+            z = z + dropout * self.tri_att_end(
+                z,
+                mask=pair_mask,
+                chunk_size=chunk_size_tri_attn,
+                use_kernels=use_cuequiv_attn or use_kernels,
+            )
+
+            z = z + self.transition_z(z)
+
         return z
 
 
@@ -314,6 +356,7 @@ class PairformerNoSeqModule(nn.Module):
         pairwise_num_heads: int = 4,
         post_layer_norm: bool = False,
         activation_checkpointing: bool = False,
+        inplace_operations: bool = False,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -322,6 +365,7 @@ class PairformerNoSeqModule(nn.Module):
         self.dropout = dropout
         self.post_layer_norm = post_layer_norm
         self.activation_checkpointing = activation_checkpointing
+        self.inplace_operations = inplace_operations
 
         self.layers = nn.ModuleList()
         for i in range(num_blocks):
@@ -332,6 +376,7 @@ class PairformerNoSeqModule(nn.Module):
                     pairwise_head_width,
                     pairwise_num_heads,
                     post_layer_norm,
+                    inplace_operations=inplace_operations,
                 ),
             )
 

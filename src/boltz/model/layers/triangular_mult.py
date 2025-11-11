@@ -39,7 +39,10 @@ def kernel_triangular_mult(
 class TriangleMultiplicationOutgoing(nn.Module):
     """TriangleMultiplicationOutgoing."""
 
-    def __init__(self, dim: int = 128) -> None:
+    def __init__(self,
+                 dim: int = 128,
+                 inplace_operations: bool = False,
+                 ) -> None:
         """Initialize the TriangularUpdate module.
 
         Parameters
@@ -49,6 +52,9 @@ class TriangleMultiplicationOutgoing(nn.Module):
 
         """
         super().__init__()
+
+        # Allow modifying tensors in place
+        self.inplace_operations = inplace_operations
 
         self.norm_in = nn.LayerNorm(dim, eps=1e-5)
         self.p_in = nn.Linear(dim, 2 * dim, bias=False)
@@ -111,16 +117,19 @@ class TriangleMultiplicationOutgoing(nn.Module):
         chunk_sizes = torch.linspace(0, x.shape[2], steps=triangle_mult_gate_nchunks+1, device=x.device).long()
         x = torch.empty((x.shape[0], x.shape[1], x.shape[2], x.shape[3]*2), device=x.device)
 
-        for i in range(triangle_mult_gate_nchunks):
-            start = chunk_sizes[i].item()
-            end = chunk_sizes[i+1].item()
-            x[:,:,start:end,:] = self.p_in(x_in[:,:,start:end,:])*self.g_in(x_in[:,:,start:end,:]).sigmoid()
-
-        #x = self.p_in(x) * self.g_in(x).sigmoid()
+        if self.inplace_operations:
+            for i in range(triangle_mult_gate_nchunks):
+                start = chunk_sizes[i].item()
+                end = chunk_sizes[i+1].item()
+                x[:,:,start:end,:] = self.p_in(x_in[:,:,start:end,:])*self.g_in(x_in[:,:,start:end,:]).sigmoid()
+        else:
+            x = self.p_in(x) * self.g_in(x).sigmoid()
 
         # Apply mask
-        #x = x * mask.unsqueeze(-1)
-        x *= mask.unsqueeze(-1)
+        if self.inplace_operations:
+            x *= mask.unsqueeze(-1)
+        else:
+            x = x * mask.unsqueeze(-1)
 
         # Split input and cast to float
         a, b = torch.chunk(x.float(), 2, dim=-1)
@@ -139,7 +148,10 @@ class TriangleMultiplicationOutgoing(nn.Module):
 class TriangleMultiplicationIncoming(nn.Module):
     """TriangleMultiplicationIncoming."""
 
-    def __init__(self, dim: int = 128) -> None:
+    def __init__(self,
+                 dim: int = 128,
+                 inplace_operations: bool = False,
+                 ) -> None:
         """Initialize the TriangularUpdate module.
 
         Parameters
@@ -149,6 +161,9 @@ class TriangleMultiplicationIncoming(nn.Module):
 
         """
         super().__init__()
+
+        # Allow modifying tensors in place
+        self.inplace_operations = inplace_operations
 
         self.norm_in = nn.LayerNorm(dim, eps=1e-5)
         self.p_in = nn.Linear(dim, 2 * dim, bias=False)
@@ -208,19 +223,21 @@ class TriangleMultiplicationIncoming(nn.Module):
         x = self.norm_in(x)
         x_in = x
         
-        chunk_sizes = torch.linspace(0, x.shape[2], steps=triangle_mult_gate_nchunks+1, device=x.device).long()
-        x = torch.empty((x.shape[0], x.shape[1], x.shape[2], x.shape[3]*2), device=x.device)
-        for i in range(triangle_mult_gate_nchunks):
-            start = chunk_sizes[i].item()
-            end = chunk_sizes[i+1].item()
-            x[:,:,start:end,:] = self.p_in(x_in[:,:,start:end,:])*self.g_in(x_in[:,:,start:end,:]).sigmoid()
-
-
-        #x = self.p_in(x) * self.g_in(x).sigmoid()
+        if self.inplace_operations:
+            chunk_sizes = torch.linspace(0, x.shape[2], steps=triangle_mult_gate_nchunks+1, device=x.device).long()
+            x = torch.empty((x.shape[0], x.shape[1], x.shape[2], x.shape[3]*2), device=x.device)
+            for i in range(triangle_mult_gate_nchunks):
+                start = chunk_sizes[i].item()
+                end = chunk_sizes[i+1].item()
+                x[:,:,start:end,:] = self.p_in(x_in[:,:,start:end,:])*self.g_in(x_in[:,:,start:end,:]).sigmoid()
+        else:
+            x = self.p_in(x) * self.g_in(x).sigmoid()
 
         # Apply mask
-        #x = x * mask.unsqueeze(-1)
-        x *= mask.unsqueeze(-1)
+        if self.inplace_operations:
+            x *= mask.unsqueeze(-1)
+        else:
+            x = x * mask.unsqueeze(-1)
 
         # Split input and cast to float
         a, b = torch.chunk(x.float(), 2, dim=-1)

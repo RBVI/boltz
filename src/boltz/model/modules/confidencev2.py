@@ -40,11 +40,13 @@ class ConfidenceModule(nn.Module):
         conditioning_cutoff_min=None,
         conditioning_cutoff_max=None,
         use_cpu_memory=False,
+        inplace_operations: bool = False,
         **kwargs,
     ):
         super().__init__()
         self.max_num_atoms_per_token = 23
         self.use_cpu_memory = use_cpu_memory
+        self.inplace_operations = inplace_operations
         self.no_update_s = pairformer_args.get("no_update_s", False)
         boundaries = torch.linspace(2, max_dist, num_dist_bins - 1)
         self.register_buffer("boundaries", boundaries)
@@ -97,6 +99,7 @@ class ConfidenceModule(nn.Module):
         self.pairformer_stack = PairformerModule(
             token_s,
             token_z,
+            inplace_operations=inplace_operations,
             **pairformer_args,
         )
         self.return_latent_feats = return_latent_feats
@@ -187,53 +190,71 @@ class ConfidenceModule(nn.Module):
         if self.add_s_input_to_s:
             s = s + self.s_input_to_s(s_inputs)
 
-        #z = self.z_norm(z)
-        #z = self.z_norm(z).to(z.dtype)
         #Probably unneccessary - above line keeps bfloat16 (is this duplicated by scope?)
-        l = self.z_norm(z)
-        z.copy_(l)
-        del l
+        if self.inplace_operations:
+            l = self.z_norm(z)
+            z.copy_(l)
+            del l
+        else:
+            z = self.z_norm(z)
+            z = self.z_norm(z).to(z.dtype)
 
         if self.add_z_input_to_z:
-            #relative_position_encoding = self.rel_pos(feats)
-            #z = z + relative_position_encoding
-            #z = z + self.token_bonds(feats["token_bonds"].float())
             if self.use_cpu_memory:
                 feats['contact_conditioning'] = feats['contact_conditioning'].cuda()
                 feats['contact_threshold'] = feats['contact_threshold'].cuda()
-            z += self.rel_pos(feats)
-            z += self.token_bonds(feats["token_bonds"].cuda().float() if self.use_cpu_memory else feats["token_bonds"].float())
+            if self.inplace_operations:
+                z += self.rel_pos(feats)
+                z += self.token_bonds(feats["token_bonds"].cuda().float() if self.use_cpu_memory else feats["token_bonds"].float())
+            else:
+                relative_position_encoding = self.rel_pos(feats)
+                z = z + relative_position_encoding
+                z = z + self.token_bonds(feats["token_bonds"].cuda().float() if self.use_cpu_memory else feats["token_bonds"].float())
             if self.bond_type_feature:
-                #z = z + self.token_bonds_type(feats["type_bonds"].long())
-                z += self.token_bonds_type(feats["type_bonds"].cuda().long() if self.use_cpu_memory else feats["type_bonds"].long())
-            #z = z + self.contact_conditioning(feats)
-            z += self.contact_conditioning(feats)
+                if self.inplace_operations:
+                    z += self.token_bonds_type(feats["type_bonds"].cuda().long() if self.use_cpu_memory else feats["type_bonds"].long())
+                else:
+                    z = z + self.token_bonds_type(feats["type_bonds"].cuda().long() if self.use_cpu_memory else feats["type_bonds"].long())
+                    
+            if self.inplace_operations:
+                z += self.contact_conditioning(feats)
+            else:
+                z = z + self.contact_conditioning(feats)
             if self.use_cpu_memory:
                 feats['contact_conditioning'] = feats['contact_conditioning'].cpu()
                 feats['contact_threshold'] = feats['contact_threshold'].cpu()
 
         s = s.repeat_interleave(multiplicity, 0)
 
-        #z = (
-        #    z
-        #    + self.s_to_z(s_inputs)[:, :, None, :]
-        #    + self.s_to_z_transpose(s_inputs)[:, None, :, :]
-        #)
-        #When in place this has to be split so the inner op is in fp32
-        z += self.s_to_z(s_inputs)[:, :, None, :]
-        z += self.s_to_z_transpose(s_inputs)[:, None, :, :]
+        if self.inplace_operations:
+            # When in place this has to be split so the inner op is in fp32
+            z += self.s_to_z(s_inputs)[:, :, None, :]
+            z += self.s_to_z_transpose(s_inputs)[:, None, :, :]
+        else:
+            z = (
+                z
+                + self.s_to_z(s_inputs)[:, :, None, :]
+                + self.s_to_z_transpose(s_inputs)[:, None, :, :]
+                )
         
         if self.add_s_to_z_prod:
-            #z = z + self.s_to_z_prod_out(
-            z += self.s_to_z_prod_out(
-                self.s_to_z_prod_in1(s_inputs)[:, :, None, :]
-                * self.s_to_z_prod_in2(s_inputs)[:, None, :, :]
-            )
+            if self.inplace_operations:
+                z += self.s_to_z_prod_out(
+                    self.s_to_z_prod_in1(s_inputs)[:, :, None, :]
+                    * self.s_to_z_prod_in2(s_inputs)[:, None, :, :]
+                )
+            else:
+                z = z + self.s_to_z_prod_out(
+                    self.s_to_z_prod_in1(s_inputs)[:, :, None, :]
+                    * self.s_to_z_prod_in2(s_inputs)[:, None, :, :]
+                )
 
-        #z = z.repeat_interleave(multiplicity, 0)
-        l = z.repeat_interleave(multiplicity, 0)
-        z.copy_(l)
-        del l
+        if self.inplace_operations:
+            l = z.repeat_interleave(multiplicity, 0)
+            z.copy_(l)
+            del l
+        else:
+            z = z.repeat_interleave(multiplicity, 0)
         s_inputs = s_inputs.repeat_interleave(multiplicity, 0)
 
         token_to_rep_atom = feats["token_to_rep_atom"].cuda() if self.use_cpu_memory else feats["token_to_rep_atom"]
@@ -251,8 +272,11 @@ class ConfidenceModule(nn.Module):
         if self.use_cpu_memory:
             d = d.cpu()
         distogram = self.dist_bin_pairwise_embed(distogram)
-        #z = z + distogram
-        z += distogram
+
+        if self.inplace_operations:
+            z += distogram
+        else:
+            z = z + distogram
         del distogram
 
         mask = feats["token_pad_mask"].repeat_interleave(multiplicity, 0)

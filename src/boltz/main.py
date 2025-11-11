@@ -1092,6 +1092,11 @@ def cli() -> None:
     help="Whether to reduce GPU memory use by transfering some low-use tensors from CUDA GPU memory to CPU memory to allow predicting larger structures.",
 )
 @click.option(
+    "--inplace_operations",
+    is_flag=True,
+    help="Whether to reduce GPU memory by modifying tensors instead of making copies. Do not use this in training since it can cause incorrect gradients during back propagation.",
+)
+@click.option(
     "--aggressive_chunking",
     is_flag=True,
     help="Whether to set chunking parametesr chunk_size_transition_z = 32, chunk_size_tri_attn = 64, triangle_mult_gate_nchunks = 4 to reduce GPU memory use to allow predicting larger structures.",
@@ -1143,6 +1148,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
     no_kernels: bool = False,
     write_embeddings: bool = False,
     use_cpu_memory: bool = False,
+    inplace_operations: bool = False,
     aggressive_chunking: bool = False,
 ) -> None:
     """Run predictions with Boltz."""
@@ -1402,6 +1408,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
             msa_args=asdict(msa_args),
             steering_args=asdict(steering_args),
             use_cpu_memory=use_cpu_memory,
+            inplace_operations=inplace_operations,
         )
         model_module.eval()
         

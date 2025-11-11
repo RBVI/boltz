@@ -224,6 +224,7 @@ class TemplateModule(nn.Module):
         min_dist: float = 3.25,
         max_dist: float = 50.75,
         num_bins: int = 38,
+        inplace_operations: bool = False,
         **kwargs,
     ) -> None:
         """Initialize the template module.
@@ -256,8 +257,10 @@ class TemplateModule(nn.Module):
             pairwise_num_heads=pairwise_num_heads,
             post_layer_norm=post_layer_norm,
             activation_checkpointing=activation_checkpointing,
+            inplace_operations=inplace_operations,
         )
-
+        self.inplace_operations = inplace_operations
+        
     def forward(
         self,
         z: Tensor,
@@ -374,6 +377,7 @@ class TemplateV2Module(nn.Module):
         min_dist: float = 3.25,
         max_dist: float = 50.75,
         num_bins: int = 38,
+        inplace_operations: bool = False,
         **kwargs,
     ) -> None:
         """Initialize the template module.
@@ -406,8 +410,10 @@ class TemplateV2Module(nn.Module):
             pairwise_num_heads=pairwise_num_heads,
             post_layer_norm=post_layer_norm,
             activation_checkpointing=activation_checkpointing,
+            inplace_operations=inplace_operations,
         )
-
+        self.inplace_operations = inplace_operations
+        
     def forward(
         self,
         z: Tensor,
@@ -527,6 +533,7 @@ class MSAModule(nn.Module):
         subsample_msa: bool = False,
         num_subsampled_msa: int = 1024,
         use_cpu_memory: bool = False,
+        inplace_operations: bool = False,
         **kwargs,
     ) -> None:
         """Initialize the MSA module.
@@ -546,7 +553,8 @@ class MSAModule(nn.Module):
         self.subsample_msa = subsample_msa
         self.num_subsampled_msa = num_subsampled_msa
         self.use_cpu_memory = use_cpu_memory
-
+        self.inplace_operations = inplace_operations
+        
         self.s_proj = nn.Linear(token_s, msa_s, bias=False)
         self.msa_proj = nn.Linear(
             const.num_tokens + 2 + int(use_paired_feature),
@@ -563,6 +571,7 @@ class MSAModule(nn.Module):
                     z_dropout,
                     pairwise_head_width,
                     pairwise_num_heads,
+                    inplace_operations=inplace_operations,
                 )
             )
 
@@ -652,8 +661,10 @@ class MSAModule(nn.Module):
 
         # Compute input projections
         m = self.msa_proj(m)
-        #m = m + self.s_proj(emb).unsqueeze(1)
-        m += self.s_proj(emb).unsqueeze(1)
+        if self.inplace_operations:
+            m += self.s_proj(emb).unsqueeze(1)
+        else:
+            m = m + self.s_proj(emb).unsqueeze(1)
 
         if self.use_cpu_memory:
             feats["msa"] = feats["msa"].cpu()
@@ -707,6 +718,7 @@ class MSALayer(nn.Module):
         z_dropout: float,
         pairwise_head_width: int = 32,
         pairwise_num_heads: int = 4,
+        inplace_operations: bool = False,
     ) -> None:
         """Initialize the MSA module.
 
@@ -724,6 +736,7 @@ class MSALayer(nn.Module):
             c_z=token_z,
             c_h=32,
             num_heads=8,
+            inplace_operations=inplace_operations,
         )
 
         self.pairformer_layer = PairformerNoSeqLayer(
@@ -731,13 +744,15 @@ class MSALayer(nn.Module):
             dropout=z_dropout,
             pairwise_head_width=pairwise_head_width,
             pairwise_num_heads=pairwise_num_heads,
+            inplace_operations=inplace_operations,
         )
         self.outer_product_mean = OuterProductMean(
             c_in=msa_s,
             c_hidden=32,
             c_out=token_z,
         )
-
+        self.inplace_operations = inplace_operations
+        
     def forward(
         self,
         z: Tensor,
@@ -770,17 +785,24 @@ class MSALayer(nn.Module):
 
         """
         # Communication to MSA stack
-        #msa_dropout = get_dropout_mask(self.msa_dropout, m, self.training)
-        #m = m + msa_dropout * self.pair_weighted_averaging(
-        get_dropout_mask(self.msa_dropout, m, self.training)
-        m += self.pair_weighted_averaging(
-            m, z, token_mask, chunk_heads_pwa
-        )
-        #m = m + self.msa_transition(m, chunk_size_transition_msa)
-        m += self.msa_transition(m, chunk_size_transition_msa)
+        if self.inplace_operations:
+            get_dropout_mask(self.msa_dropout, m, self.training)
+            m += self.pair_weighted_averaging(
+                m, z, token_mask, chunk_heads_pwa
+            )
 
-        #z = z + self.outer_product_mean(m, msa_mask, chunk_size_outer_product)
-        z += self.outer_product_mean(m, msa_mask, chunk_size_outer_product)
+            m += self.msa_transition(m, chunk_size_transition_msa)
+
+            z += self.outer_product_mean(m, msa_mask, chunk_size_outer_product)
+        else:
+            msa_dropout = get_dropout_mask(self.msa_dropout, m, self.training)
+            m = m + msa_dropout * self.pair_weighted_averaging(
+                m, z, token_mask, chunk_heads_pwa
+            )
+
+            m = m + self.msa_transition(m, chunk_size_transition_msa)
+
+            z = z + self.outer_product_mean(m, msa_mask, chunk_size_outer_product)
 
         # Compute pairwise stack
         z = self.pairformer_layer(

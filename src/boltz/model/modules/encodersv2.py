@@ -132,6 +132,7 @@ class SingleConditioning(Module):
         transition_expansion_factor: int = 2,
         eps: float = 1e-20,
         disable_times: bool = False,
+        inplace_operations: bool = False,
     ) -> None:
         super().__init__()
         self.eps = eps
@@ -153,7 +154,8 @@ class SingleConditioning(Module):
             transitions.append(transition)
 
         self.transitions = transitions
-
+        self.inplace_operations = inplace_operations
+        
     def forward(
         self,
         times,  # Float[' b'],
@@ -186,11 +188,13 @@ class PairwiseConditioning(Module):
         dim_token_rel_pos_feats,
         num_transitions=2,
         transition_expansion_factor=2,
-        use_cpu_memory=False,
+        use_cpu_memory: bool = False,
+        inplace_operations: bool = False,
     ):
         super().__init__()
         self.use_cpu_memory = use_cpu_memory
-
+        self.inplace_operations = inplace_operations
+        
         self.dim_pairwise_init_proj = nn.Sequential(
             nn.LayerNorm(token_z + dim_token_rel_pos_feats),
             LinearNoBias(token_z + dim_token_rel_pos_feats, token_z),

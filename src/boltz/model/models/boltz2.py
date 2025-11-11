@@ -105,6 +105,7 @@ class Boltz2(LightningModule):
         use_templates_v2: bool = False,
         use_kernels: bool = False,
         use_cpu_memory: bool = False,
+        inplace_operations: bool = False,
     ) -> None:
         super().__init__()
         self.save_hyperparameters(ignore=["validators"])
@@ -165,6 +166,9 @@ class Boltz2(LightningModule):
 
         # Move some tensors from GPU to CPU memory 
         self.use_cpu_memory = use_cpu_memory
+
+        # Allow modifying tensors in place
+        self.inplace_operations = inplace_operations
         
         # Input embeddings
         full_embedder_args = {
@@ -220,9 +224,13 @@ class Boltz2(LightningModule):
         self.use_templates = use_templates
         if use_templates:
             if use_templates_v2:
-                self.template_module = TemplateV2Module(token_z, **template_args)
+                self.template_module = TemplateV2Module(token_z,
+                                                        inplace_operations=inplace_operations,
+                                                        **template_args)
             else:
-                self.template_module = TemplateModule(token_z, **template_args)
+                self.template_module = TemplateModule(token_z,
+                                                      inplace_operations=inplace_operations,
+                                                      **template_args)
             if compile_templates:
                 self.is_template_compiled = True
                 self.template_module = torch.compile(
@@ -235,6 +243,7 @@ class Boltz2(LightningModule):
             token_z=token_z,
             token_s=token_s,
             use_cpu_memory=use_cpu_memory,
+            inplace_operations=inplace_operations,
             **msa_args,
         )
         if compile_msa:
@@ -244,7 +253,9 @@ class Boltz2(LightningModule):
                 dynamic=False,
                 fullgraph=False,
             )
-        self.pairformer_module = PairformerModule(token_s, token_z, **pairformer_args)
+        self.pairformer_module = PairformerModule(token_s, token_z,
+                                                  inplace_operations=inplace_operations,
+                                                  **pairformer_args)
         if compile_pairformer:
             self.is_pairformer_compiled = True
             self.pairformer_module = torch.compile(
@@ -275,6 +286,7 @@ class Boltz2(LightningModule):
             use_atom_backbone_feat=use_atom_backbone_feat,
             use_residue_feats_atoms=use_residue_feats_atoms,
             use_cpu_memory=use_cpu_memory,
+            inplace_operations=inplace_operations,
         )
 
         # Output modules
@@ -288,6 +300,7 @@ class Boltz2(LightningModule):
             },
             compile_score=compile_structure,
             use_cpu_memory=use_cpu_memory,
+            inplace_operations=inplace_operations,
             **diffusion_process_args,
         )
         self.distogram_module = DistogramModule(
@@ -319,6 +332,7 @@ class Boltz2(LightningModule):
                 conditioning_cutoff_min=conditioning_cutoff_min,
                 conditioning_cutoff_max=conditioning_cutoff_max,
                 use_cpu_memory=use_cpu_memory,
+                inplace_operations=inplace_operations,
                 **confidence_model_args,
             )
             if compile_confidence:
@@ -447,21 +461,30 @@ class Boltz2(LightningModule):
                 self.z_init_1(s_inputs)[:, :, None]
                 + self.z_init_2(s_inputs)[:, None, :]
             )
-            #relative_position_encoding = self.rel_pos(feats)
-            #z_init = z_init + relative_position_encoding
-            #z_init = z_init + self.token_bonds(feats["token_bonds"].float())
-            z_init += self.rel_pos(feats)
-            z_init += self.token_bonds(feats["token_bonds"].float())
+            if self.inplace_operations:
+                z_init += self.rel_pos(feats)
+                z_init += self.token_bonds(feats["token_bonds"].float())
+            else:
+                relative_position_encoding = self.rel_pos(feats)
+                z_init = z_init + relative_position_encoding
+                z_init = z_init + self.token_bonds(feats["token_bonds"].float())
+
             if self.use_cpu_memory:
                 feats["token_bonds"] = feats["token_bonds"].cpu()            
             
             if self.bond_type_feature:
-                #z_init = z_init + self.token_bonds_type(feats["type_bonds"].long())
-                z_init += self.token_bonds_type(feats["type_bonds"].long())
+                if self.inplace_operations:
+                    z_init += self.token_bonds_type(feats["type_bonds"].long())
+                else:
+                    z_init = z_init + self.token_bonds_type(feats["type_bonds"].long())
+
                 #Changes precision compared to original
 
-            #z_init = z_init + self.contact_conditioning(feats)
-            z_init += self.contact_conditioning(feats)
+            if self.inplace_operations:
+                z_init += self.contact_conditioning(feats)
+            else:
+                z_init = z_init + self.contact_conditioning(feats)
+
             if self.use_cpu_memory:
                 feats['contact_conditioning'] = feats['contact_conditioning'].cpu()
                 feats['contact_threshold'] = feats['contact_threshold'].cpu()
@@ -504,10 +527,14 @@ class Boltz2(LightningModule):
                             else:
                                 template_module = self.template_module
 
-                            #z = z + template_module(
-                            z += template_module(
-                                z, feats, pair_mask, use_kernels=self.use_kernels
-                            )
+                            if self.inplace_operations:
+                                z += template_module(
+                                    z, feats, pair_mask, use_kernels=self.use_kernels
+                                )
+                            else:
+                                z = z + template_module(
+                                    z, feats, pair_mask, use_kernels=self.use_kernels
+                                )
 
                         if self.is_msa_compiled and not self.training:
                             msa_module = self.msa_module._orig_mod  # noqa: SLF001
@@ -537,9 +564,15 @@ class Boltz2(LightningModule):
                             chunk_size_threshold=chunk_size_threshold
                         )
                         if self.use_cpu_memory:
-                            z += z_orig.cuda()
+                            if self.inplace_operations:
+                                z += z_orig.cuda()
+                            else:
+                                z = z + z_orig.cuda()
                         else:
-                            z += z_orig
+                            if self.inplace_operations:
+                                z += z_orig
+                            else:
+                                z = z + z_orig
                         # Revert to uncompiled version for validation
                         if self.is_pairformer_compiled and not self.training:
                             pairformer_module = self.pairformer_module._orig_mod  # noqa: SLF001
