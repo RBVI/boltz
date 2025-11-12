@@ -214,11 +214,12 @@ class PairwiseConditioning(Module):
         z_trunk,  # Float['b n n tz'],
         token_rel_pos_feats,  # Float['b n n 3'],
     ):  # -> Float['b n n tz']:
-        #z = torch.cat((z_trunk, token_rel_pos_feats), dim=-1)
-        z = torch.cat((z_trunk["key"], token_rel_pos_feats["key"]), dim=-1)
-        token_rel_pos_feats.pop("key")
         if self.use_cpu_memory:
+            z = torch.cat((z_trunk["key"], token_rel_pos_feats["key"]), dim=-1)
+            token_rel_pos_feats.pop("key")
             z_trunk["key"] = z_trunk["key"].cpu()
+        else:
+            z = torch.cat((z_trunk, token_rel_pos_feats), dim=-1)
 
         z = self.dim_pairwise_init_proj(z)
 

@@ -461,11 +461,11 @@ class Boltz2(LightningModule):
                 self.z_init_1(s_inputs)[:, :, None]
                 + self.z_init_2(s_inputs)[:, None, :]
             )
+            relative_position_encoding = self.rel_pos(feats)
             if self.inplace_operations:
-                z_init += self.rel_pos(feats)
+                z_init += relative_position_encoding
                 z_init += self.token_bonds(feats["token_bonds"].float())
             else:
-                relative_position_encoding = self.rel_pos(feats)
                 z_init = z_init + relative_position_encoding
                 z_init = z_init + self.token_bonds(feats["token_bonds"].float())
 
@@ -623,19 +623,29 @@ class Boltz2(LightningModule):
                         )
                     )
                 else:
-                    relative_position_encoding = {"key": self.rel_pos(feats)}
-                    z_container = {"key": z}
-                    del z
-                    q, c, to_keys, atom_enc_bias, atom_dec_bias, token_trans_bias = (
-                        self.diffusion_conditioning(
-                            s_trunk=s,
-                            #z_trunk=z,
-                            z_trunk=z_container,
-                            relative_position_encoding=relative_position_encoding,
-                            feats=feats,
+                    if self.use_cpu_memory:
+                        relative_position_encoding = {"key": self.rel_pos(feats)}
+                        z_container = {"key": z}
+                        del z
+                        q, c, to_keys, atom_enc_bias, atom_dec_bias, token_trans_bias = (
+                            self.diffusion_conditioning(
+                                s_trunk=s,
+                                #z_trunk=z,
+                                z_trunk=z_container,
+                                relative_position_encoding=relative_position_encoding,
+                                feats=feats,
+                            )
                         )
-                    )
-                    del relative_position_encoding
+                        del relative_position_encoding
+                    else:
+                        q, c, to_keys, atom_enc_bias, atom_dec_bias, token_trans_bias = (
+                            self.diffusion_conditioning(
+                                s_trunk=s,
+                                z_trunk=z,
+                                relative_position_encoding=relative_position_encoding,
+                                feats=feats,
+                            )
+                        )
 
                 if self.use_cpu_memory:
                     feats["ref_element"] = feats["ref_element"].cpu()
@@ -714,8 +724,8 @@ class Boltz2(LightningModule):
                 assert len(feats["coords"].shape) == 3
 
         if self.confidence_prediction:
-            z = z_container.pop("key")
             if self.use_cpu_memory:
+                z = z_container.pop("key")
                 z = z.cuda()
             dict_out.update(
                 self.confidence_module(

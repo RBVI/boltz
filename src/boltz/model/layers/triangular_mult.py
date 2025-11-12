@@ -113,11 +113,9 @@ class TriangleMultiplicationOutgoing(nn.Module):
         # Input gating: D -> D
         x = self.norm_in(x)
         x_in = x
-
-        chunk_sizes = torch.linspace(0, x.shape[2], steps=triangle_mult_gate_nchunks+1, device=x.device).long()
-        x = torch.empty((x.shape[0], x.shape[1], x.shape[2], x.shape[3]*2), device=x.device)
-
         if self.inplace_operations:
+            chunk_sizes = torch.linspace(0, x.shape[2], steps=triangle_mult_gate_nchunks+1, device=x.device).long()
+            x = torch.empty((x.shape[0], x.shape[1], x.shape[2], x.shape[3]*2), device=x.device)
             for i in range(triangle_mult_gate_nchunks):
                 start = chunk_sizes[i].item()
                 end = chunk_sizes[i+1].item()
