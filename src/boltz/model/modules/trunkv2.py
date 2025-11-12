@@ -85,6 +85,7 @@ class InputEmbedder(nn.Module):
         use_no_atom_char: bool = False,
         use_atom_backbone_feat: bool = False,
         use_residue_feats_atoms: bool = False,
+        use_cpu_memory: bool = False,
     ) -> None:
         """Initialize the input embedder.
 
@@ -117,6 +118,7 @@ class InputEmbedder(nn.Module):
             use_no_atom_char=use_no_atom_char,
             use_atom_backbone_feat=use_atom_backbone_feat,
             use_residue_feats_atoms=use_residue_feats_atoms,
+            use_cpu_memory=use_cpu_memory,
         )
 
         self.atom_enc_proj_z = nn.Sequential(

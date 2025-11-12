@@ -268,6 +268,7 @@ class AtomEncoder(Module):
         use_no_atom_char=False,
         use_atom_backbone_feat=False,
         use_residue_feats_atoms=False,
+        use_cpu_memory: bool = False,
     ):
         super().__init__()
 
@@ -280,6 +281,7 @@ class AtomEncoder(Module):
         self.use_no_atom_char = use_no_atom_char
         self.use_atom_backbone_feat = use_atom_backbone_feat
         self.use_residue_feats_atoms = use_residue_feats_atoms
+        self.use_cpu_memory = use_cpu_memory
 
         self.structure_prediction = structure_prediction
         if structure_prediction:
@@ -331,10 +333,12 @@ class AtomEncoder(Module):
             atom_feats = [
                 atom_ref_pos,
                 feats["ref_charge"].unsqueeze(-1),
-                feats["ref_element"],
+                feats["ref_element"].cuda() if self.use_cpu_memory else feats["ref_element"],
             ]
             if not self.use_no_atom_char:
-                atom_feats.append(feats["ref_atom_name_chars"].reshape(B, N, 4 * 64))
+                atom_feats.append(feats["ref_atom_name_chars"].reshape(B, N, 4 * 64).cuda()
+                                  if self.use_cpu_memory else
+                                  feats["ref_atom_name_chars"].reshape(B, N, 4 * 64))
             if self.use_atom_backbone_feat:
                 atom_feats.append(feats["atom_backbone_feat"])
             if self.use_residue_feats_atoms:

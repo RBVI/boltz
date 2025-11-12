@@ -55,6 +55,7 @@ class DiffusionConditioning(Module):
             use_no_atom_char=use_no_atom_char,
             use_atom_backbone_feat=use_atom_backbone_feat,
             use_residue_feats_atoms=use_residue_feats_atoms,
+            use_cpu_memory=use_cpu_memory,
         )
 
         self.atom_enc_proj_z = nn.ModuleList()
