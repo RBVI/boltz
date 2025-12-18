@@ -79,6 +79,8 @@ class AffinityModule(nn.Module):
             False,
             groups=groups,
         )
+
+        self.use_cpu_memory = use_cpu_memory
         self.inplace_operations = inplace_operations
         
     def forward(
