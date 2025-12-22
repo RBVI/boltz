@@ -440,6 +440,8 @@ class Boltz2(LightningModule):
         triangle_mult_gate_nchunks: int = 1,
         chunk_size_threshold: int = 384
     ) -> dict[str, Tensor]:
+        from boltz.model.optim.memory_tracking import mem_track, mem_clear_cache
+        mem_track('Start Boltz2.forward()')
         if self.use_cpu_memory:
             feats["token_to_rep_atom"] = feats["token_to_rep_atom"].cpu() #confidence
             feats["msa_mask"] = feats["msa_mask"].cpu()
@@ -500,6 +502,7 @@ class Boltz2(LightningModule):
             mask = feats["token_pad_mask"].float()
             pair_mask = mask[:, :, None] * mask[:, None, :]
             if self.run_trunk_and_structure:
+                mem_track('Start trunk and structure')
                 for i in range(recycling_steps + 1):
                     with torch.set_grad_enabled(
                         self.training
@@ -555,6 +558,7 @@ class Boltz2(LightningModule):
                             z_orig = z.cpu()
                         else:
                             z_orig = z
+                        mem_track(f'Start msa module step {i+1}')                            
                         z = msa_module(
                             z, s_inputs, feats, use_kernels=self.use_kernels,
                             chunk_size_transition_z=chunk_size_transition_z, 
@@ -580,6 +584,7 @@ class Boltz2(LightningModule):
                         else:
                             pairformer_module = self.pairformer_module
 
+                        mem_track(f'Start pairformer module step {i+1}')
                         s, z = pairformer_module(
                             s,
                             z,
@@ -591,6 +596,9 @@ class Boltz2(LightningModule):
                             triangle_mult_gate_nchunks=triangle_mult_gate_nchunks,
                             chunk_size_threshold=chunk_size_threshold
                         )
+
+                        mem_track(f'End pairformer module step {i+1}')
+                        #mem_clear_cache()
 
             pdistogram = self.distogram_module(z)
             dict_out = {
@@ -624,6 +632,7 @@ class Boltz2(LightningModule):
                         )
                     )
                 else:
+                    mem_track('Start diffusion conditioning')
                     if self.use_cpu_memory:
                         relative_position_encoding = {"key": self.rel_pos(feats)}
                         z_container = {"key": z}
@@ -662,6 +671,7 @@ class Boltz2(LightningModule):
                 }
                 del q, c, to_keys, atom_enc_bias, atom_dec_bias, token_trans_bias
 
+                mem_track('Start structure sampling')
                 with torch.autocast("cuda", enabled=False):
                     struct_out = self.structure_module.sample(
                         s_trunk=s.float(),
@@ -725,6 +735,7 @@ class Boltz2(LightningModule):
                 assert len(feats["coords"].shape) == 3
 
         if self.confidence_prediction:
+            mem_track('Start confidence prediction')
             if self.use_cpu_memory:
                 z = z_container.pop("key")
                 z = z.cuda()
@@ -758,7 +769,10 @@ class Boltz2(LightningModule):
         if self.use_cpu_memory:
             dict_out["sample_atom_coords"] = dict_out["sample_atom_coords"].cuda()
 
+        mem_track('End confidence prediction')
+
         if self.affinity_prediction:
+            mem_track('Start affinity prediction')
             pad_token_mask = feats["token_pad_mask"][0]
             rec_mask = feats["mol_type"][0] == 0
             rec_mask = rec_mask * pad_token_mask

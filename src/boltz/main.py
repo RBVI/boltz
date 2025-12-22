@@ -1101,6 +1101,11 @@ def cli() -> None:
     is_flag=True,
     help="Whether to set chunking parametesr chunk_size_transition_z = 32, chunk_size_tri_attn = 64, triangle_mult_gate_nchunks = 4 to reduce GPU memory use to allow predicting larger structures.",
 )
+@click.option(
+    "--track_memory",
+    is_flag=True,
+    help="Whether to write a log file of tensor memory use.  File names is memory-use-{date}",
+)
 def predict(  # noqa: C901, PLR0915, PLR0912
     data: str,
     out_dir: str,
@@ -1150,6 +1155,7 @@ def predict(  # noqa: C901, PLR0915, PLR0912
     use_cpu_memory: bool = False,
     inplace_operations: bool = False,
     aggressive_chunking: bool = False,
+    track_memory: bool = False,
 ) -> None:
     """Run predictions with Boltz."""
     # If cpu, write a friendly warning
@@ -1411,6 +1417,11 @@ def predict(  # noqa: C901, PLR0915, PLR0912
             inplace_operations=inplace_operations,
         )
         model_module.eval()
+
+        from boltz.model.optim.memory_tracking import mem_track_start, mem_track
+        if track_memory:
+            mem_track_start()
+        mem_track('Starting predict')
         
         if use_bfloat16:
             # Compute structure predictions
@@ -1428,6 +1439,8 @@ def predict(  # noqa: C901, PLR0915, PLR0912
                 return_predictions=False,
             )
 
+    mem_track('Finished predict')
+    
     # Check if affinity predictions are needed
     if any(r.affinity for r in manifest.records):
         # Print header
