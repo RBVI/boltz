@@ -85,6 +85,7 @@ class InputEmbedder(nn.Module):
         use_no_atom_char: bool = False,
         use_atom_backbone_feat: bool = False,
         use_residue_feats_atoms: bool = False,
+        use_cpu_memory: bool = False,
     ) -> None:
         """Initialize the input embedder.
 
@@ -117,6 +118,7 @@ class InputEmbedder(nn.Module):
             use_no_atom_char=use_no_atom_char,
             use_atom_backbone_feat=use_atom_backbone_feat,
             use_residue_feats_atoms=use_residue_feats_atoms,
+            use_cpu_memory=use_cpu_memory,
         )
 
         self.atom_enc_proj_z = nn.Sequential(
@@ -224,6 +226,7 @@ class TemplateModule(nn.Module):
         min_dist: float = 3.25,
         max_dist: float = 50.75,
         num_bins: int = 38,
+        inplace_operations: bool = False,
         **kwargs,
     ) -> None:
         """Initialize the template module.
@@ -256,8 +259,10 @@ class TemplateModule(nn.Module):
             pairwise_num_heads=pairwise_num_heads,
             post_layer_norm=post_layer_norm,
             activation_checkpointing=activation_checkpointing,
+            inplace_operations=inplace_operations,
         )
-
+        self.inplace_operations = inplace_operations
+        
     def forward(
         self,
         z: Tensor,
@@ -374,6 +379,7 @@ class TemplateV2Module(nn.Module):
         min_dist: float = 3.25,
         max_dist: float = 50.75,
         num_bins: int = 38,
+        inplace_operations: bool = False,
         **kwargs,
     ) -> None:
         """Initialize the template module.
@@ -406,8 +412,10 @@ class TemplateV2Module(nn.Module):
             pairwise_num_heads=pairwise_num_heads,
             post_layer_norm=post_layer_norm,
             activation_checkpointing=activation_checkpointing,
+            inplace_operations=inplace_operations,
         )
-
+        self.inplace_operations = inplace_operations
+        
     def forward(
         self,
         z: Tensor,
@@ -526,6 +534,8 @@ class MSAModule(nn.Module):
         use_paired_feature: bool = True,
         subsample_msa: bool = False,
         num_subsampled_msa: int = 1024,
+        use_cpu_memory: bool = False,
+        inplace_operations: bool = False,
         **kwargs,
     ) -> None:
         """Initialize the MSA module.
@@ -544,7 +554,9 @@ class MSAModule(nn.Module):
         self.activation_checkpointing = activation_checkpointing
         self.subsample_msa = subsample_msa
         self.num_subsampled_msa = num_subsampled_msa
-
+        self.use_cpu_memory = use_cpu_memory
+        self.inplace_operations = inplace_operations
+        
         self.s_proj = nn.Linear(token_s, msa_s, bias=False)
         self.msa_proj = nn.Linear(
             const.num_tokens + 2 + int(use_paired_feature),
@@ -561,6 +573,7 @@ class MSAModule(nn.Module):
                     z_dropout,
                     pairwise_head_width,
                     pairwise_num_heads,
+                    inplace_operations=inplace_operations,
                 )
             )
 
@@ -569,6 +582,12 @@ class MSAModule(nn.Module):
         z: Tensor,
         emb: Tensor,
         feats: dict[str, Tensor],
+        chunk_size_transition_z: int = 64,
+        chunk_size_transition_msa: int = 32,
+        chunk_size_outer_product: int = 4,
+        chunk_size_tri_attn: int = 128,
+        triangle_mult_gate_nchunks: int = 1,
+        chunk_size_threshold: int = 384,
         use_kernels: bool = False,
     ) -> Tensor:
         """Perform the forward pass.
@@ -592,18 +611,20 @@ class MSAModule(nn.Module):
         """
         # Set chunk sizes
         if not self.training:
-            if z.shape[1] > const.chunk_size_threshold:
+            if z.shape[1] > chunk_size_threshold:
                 chunk_heads_pwa = True
-                chunk_size_transition_z = 64
-                chunk_size_transition_msa = 32
-                chunk_size_outer_product = 4
-                chunk_size_tri_attn = 128
+                chunk_size_transition_z = chunk_size_transition_z
+                chunk_size_transition_msa = chunk_size_transition_msa
+                chunk_size_outer_product = chunk_size_outer_product
+                chunk_size_tri_attn = chunk_size_tri_attn
+                triangle_mult_gate_nchunks = triangle_mult_gate_nchunks
             else:
                 chunk_heads_pwa = False
                 chunk_size_transition_z = None
                 chunk_size_transition_msa = None
                 chunk_size_outer_product = None
                 chunk_size_tri_attn = 512
+                triangle_mult_gate_nchunks = 1
         else:
             chunk_heads_pwa = False
             chunk_size_transition_z = None
@@ -612,30 +633,47 @@ class MSAModule(nn.Module):
             chunk_size_tri_attn = None
 
         # Load relevant features
-        msa = feats["msa"]
-        msa = torch.nn.functional.one_hot(msa, num_classes=const.num_tokens)
+        #msa = feats["msa"]
+        #msa = torch.nn.functional.one_hot(msa, num_classes=const.num_tokens)
         has_deletion = feats["has_deletion"].unsqueeze(-1)
         deletion_value = feats["deletion_value"].unsqueeze(-1)
         is_paired = feats["msa_paired"].unsqueeze(-1)
-        msa_mask = feats["msa_mask"]
+        if self.use_cpu_memory:
+            msa_mask = feats["msa_mask"].cuda()
+        else:
+            msa_mask = feats["msa_mask"]
         token_mask = feats["token_pad_mask"].float()
         token_mask = token_mask[:, :, None] * token_mask[:, None, :]
 
         # Compute MSA embeddings
         if self.use_paired_feature:
-            m = torch.cat([msa, has_deletion, deletion_value, is_paired], dim=-1)
+            #m = torch.cat([msa, has_deletion, deletion_value, is_paired], dim=-1)
+            m = torch.cat([torch.nn.functional.one_hot(feats['msa'], num_classes=const.num_tokens), has_deletion, deletion_value, is_paired], dim=-1)
         else:
-            m = torch.cat([msa, has_deletion, deletion_value], dim=-1)
+            #m = torch.cat([msa, has_deletion, deletion_value], dim=-1)
+            m = torch.cat([torch.nn.functional.one_hot(feats['msa'], num_classes=const.num_tokens), has_deletion, deletion_value], dim=-1)
 
         # Subsample the MSA
         if self.subsample_msa:
-            msa_indices = torch.randperm(msa.shape[1])[: self.num_subsampled_msa]
+            #msa_indices = torch.randperm(msa.shape[1])[: self.num_subsampled_msa]
+            msa_indices = torch.randperm(feats['msa'].shape[1])[: self.num_subsampled_msa]
             m = m[:, msa_indices]
             msa_mask = msa_mask[:, msa_indices]
+            del msa_indices
 
         # Compute input projections
         m = self.msa_proj(m)
-        m = m + self.s_proj(emb).unsqueeze(1)
+        if self.inplace_operations:
+            m += self.s_proj(emb).unsqueeze(1)
+        else:
+            m = m + self.s_proj(emb).unsqueeze(1)
+
+        if self.use_cpu_memory:
+            feats["msa"] = feats["msa"].cpu()
+            feats["msa_paired"] = feats["msa_paired"].cpu()
+            feats["has_deletion"] = feats["has_deletion"].cpu()
+            feats["deletion_value"] = feats["deletion_value"].cpu()
+        del has_deletion, deletion_value, is_paired
 
         # Perform MSA blocks
         for i in range(self.msa_blocks):
@@ -651,7 +689,8 @@ class MSAModule(nn.Module):
                     chunk_size_transition_msa,
                     chunk_size_outer_product,
                     chunk_size_tri_attn,
-                    use_kernels,
+                    triangle_mult_gate_nchunks,
+                    use_kernels=use_kernels,
                 )
             else:
                 z, m = self.layers[i](
@@ -664,7 +703,8 @@ class MSAModule(nn.Module):
                     chunk_size_transition_msa,
                     chunk_size_outer_product,
                     chunk_size_tri_attn,
-                    use_kernels,
+                    triangle_mult_gate_nchunks,
+                    use_kernels=use_kernels,
                 )
         return z
 
@@ -680,6 +720,7 @@ class MSALayer(nn.Module):
         z_dropout: float,
         pairwise_head_width: int = 32,
         pairwise_num_heads: int = 4,
+        inplace_operations: bool = False,
     ) -> None:
         """Initialize the MSA module.
 
@@ -697,6 +738,7 @@ class MSALayer(nn.Module):
             c_z=token_z,
             c_h=32,
             num_heads=8,
+            inplace_operations=inplace_operations,
         )
 
         self.pairformer_layer = PairformerNoSeqLayer(
@@ -704,13 +746,15 @@ class MSALayer(nn.Module):
             dropout=z_dropout,
             pairwise_head_width=pairwise_head_width,
             pairwise_num_heads=pairwise_num_heads,
+            inplace_operations=inplace_operations,
         )
         self.outer_product_mean = OuterProductMean(
             c_in=msa_s,
             c_hidden=32,
             c_out=token_z,
         )
-
+        self.inplace_operations = inplace_operations
+        
     def forward(
         self,
         z: Tensor,
@@ -722,6 +766,7 @@ class MSALayer(nn.Module):
         chunk_size_transition_msa: int = None,
         chunk_size_outer_product: int = None,
         chunk_size_tri_attn: int = None,
+        triangle_mult_gate_nchunks: int = 1,
         use_kernels: bool = False,
     ) -> tuple[Tensor, Tensor]:
         """Perform the forward pass.
@@ -742,17 +787,29 @@ class MSALayer(nn.Module):
 
         """
         # Communication to MSA stack
-        msa_dropout = get_dropout_mask(self.msa_dropout, m, self.training)
-        m = m + msa_dropout * self.pair_weighted_averaging(
-            m, z, token_mask, chunk_heads_pwa
-        )
-        m = m + self.msa_transition(m, chunk_size_transition_msa)
+        if self.inplace_operations:
+            get_dropout_mask(self.msa_dropout, m, self.training)
+            m += self.pair_weighted_averaging(
+                m, z, token_mask, chunk_heads_pwa
+            )
 
-        z = z + self.outer_product_mean(m, msa_mask, chunk_size_outer_product)
+            m += self.msa_transition(m, chunk_size_transition_msa)
+
+            z += self.outer_product_mean(m, msa_mask, chunk_size_outer_product)
+        else:
+            msa_dropout = get_dropout_mask(self.msa_dropout, m, self.training)
+            m = m + msa_dropout * self.pair_weighted_averaging(
+                m, z, token_mask, chunk_heads_pwa
+            )
+
+            m = m + self.msa_transition(m, chunk_size_transition_msa)
+
+            z = z + self.outer_product_mean(m, msa_mask, chunk_size_outer_product)
 
         # Compute pairwise stack
         z = self.pairformer_layer(
-            z, token_mask, chunk_size_tri_attn, use_kernels=use_kernels
+            z, token_mask, chunk_size_transition_z, 
+            chunk_size_tri_attn, triangle_mult_gate_nchunks=triangle_mult_gate_nchunks, use_kernels=use_kernels
         )
 
         return z, m

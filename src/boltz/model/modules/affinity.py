@@ -44,6 +44,8 @@ class AffinityModule(nn.Module):
         max_dist=22,
         use_cross_transformer: bool = False,
         groups: dict = {},
+        use_cpu_memory: bool = False,
+        inplace_operations: bool = False,
     ):
         super().__init__()
         boundaries = torch.linspace(2, max_dist, num_dist_bins - 1)
@@ -61,9 +63,13 @@ class AffinityModule(nn.Module):
             token_z=token_z,
             dim_token_rel_pos_feats=token_z,
             num_transitions=2,
+            use_cpu_memory=use_cpu_memory,
+            inplace_operations=inplace_operations,
         )
 
-        self.pairformer_stack = PairformerNoSeqModule(token_z, **pairformer_args)
+        self.pairformer_stack = PairformerNoSeqModule(token_z,
+                                                      inplace_operations=inplace_operations,
+                                                      **pairformer_args)
         self.affinity_heads = AffinityHeadsTransformer(
             token_z,
             transformer_args["token_s"],
@@ -74,6 +80,9 @@ class AffinityModule(nn.Module):
             groups=groups,
         )
 
+        self.use_cpu_memory = use_cpu_memory
+        self.inplace_operations = inplace_operations
+        
     def forward(
         self,
         s_inputs,
@@ -101,13 +110,19 @@ class AffinityModule(nn.Module):
             BM, N, _ = x_pred.shape
             B = BM // multiplicity
             mult = multiplicity
-        x_pred_repr = torch.bmm(token_to_rep_atom.float(), x_pred)
+        if self.use_cpu_memory:
+            x_pred_repr = torch.bmm(token_to_rep_atom.cuda().float(), x_pred)
+        else:
+            x_pred_repr = torch.bmm(token_to_rep_atom.float(), x_pred)
         d = torch.cdist(x_pred_repr, x_pred_repr)
 
         distogram = (d.unsqueeze(-1) > self.boundaries).sum(dim=-1).long()
         distogram = self.dist_bin_pairwise_embed(distogram)
 
-        z = z + self.pairwise_conditioner(z_trunk=z, token_rel_pos_feats=distogram)
+        if self.use_cpu_memory:
+            z = z + self.pairwise_conditioner(z_trunk={"key": z}, token_rel_pos_feats=distogram)
+        else:
+            z = z + self.pairwise_conditioner(z_trunk=z, token_rel_pos_feats=distogram)
 
         pad_token_mask = feats["token_pad_mask"].repeat_interleave(multiplicity, 0)
         rec_mask = (feats["mol_type"] == 0).repeat_interleave(multiplicity, 0)

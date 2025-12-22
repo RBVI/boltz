@@ -546,6 +546,7 @@ def process_token_features(
     pocket_feature = (
         np.zeros(len(token_data)) + const.pocket_contact_info["UNSPECIFIED"]
     )
+    #different behaviour bertween v1 and v2 (was [], []) - v2: None, None
     if inference_binder is not None:
         assert inference_pocket is not None
         pocket_residues = set(inference_pocket)
@@ -644,6 +645,7 @@ def process_token_features(
             resolved_mask = pad_dim(resolved_mask, 0, pad_len)
             disto_mask = pad_dim(disto_mask, 0, pad_len)
             pocket_feature = pad_dim(pocket_feature, 0, pad_len)
+            cyclic_period = pad_dim(cyclic_period, 0, pad_len)
 
     token_features = {
         "token_index": token_index,

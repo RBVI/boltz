@@ -132,6 +132,7 @@ class SingleConditioning(Module):
         transition_expansion_factor: int = 2,
         eps: float = 1e-20,
         disable_times: bool = False,
+        inplace_operations: bool = False,
     ) -> None:
         super().__init__()
         self.eps = eps
@@ -153,7 +154,8 @@ class SingleConditioning(Module):
             transitions.append(transition)
 
         self.transitions = transitions
-
+        self.inplace_operations = inplace_operations
+        
     def forward(
         self,
         times,  # Float[' b'],
@@ -186,9 +188,13 @@ class PairwiseConditioning(Module):
         dim_token_rel_pos_feats,
         num_transitions=2,
         transition_expansion_factor=2,
+        use_cpu_memory: bool = False,
+        inplace_operations: bool = False,
     ):
         super().__init__()
-
+        self.use_cpu_memory = use_cpu_memory
+        self.inplace_operations = inplace_operations
+        
         self.dim_pairwise_init_proj = nn.Sequential(
             nn.LayerNorm(token_z + dim_token_rel_pos_feats),
             LinearNoBias(token_z + dim_token_rel_pos_feats, token_z),
@@ -208,7 +214,13 @@ class PairwiseConditioning(Module):
         z_trunk,  # Float['b n n tz'],
         token_rel_pos_feats,  # Float['b n n 3'],
     ):  # -> Float['b n n tz']:
-        z = torch.cat((z_trunk, token_rel_pos_feats), dim=-1)
+        if self.use_cpu_memory:
+            z = torch.cat((z_trunk["key"], token_rel_pos_feats["key"]), dim=-1)
+            token_rel_pos_feats.pop("key")
+            z_trunk["key"] = z_trunk["key"].cpu()
+        else:
+            z = torch.cat((z_trunk, token_rel_pos_feats), dim=-1)
+
         z = self.dim_pairwise_init_proj(z)
 
         for transition in self.transitions:
@@ -256,6 +268,7 @@ class AtomEncoder(Module):
         use_no_atom_char=False,
         use_atom_backbone_feat=False,
         use_residue_feats_atoms=False,
+        use_cpu_memory: bool = False,
     ):
         super().__init__()
 
@@ -268,6 +281,7 @@ class AtomEncoder(Module):
         self.use_no_atom_char = use_no_atom_char
         self.use_atom_backbone_feat = use_atom_backbone_feat
         self.use_residue_feats_atoms = use_residue_feats_atoms
+        self.use_cpu_memory = use_cpu_memory
 
         self.structure_prediction = structure_prediction
         if structure_prediction:
@@ -319,10 +333,12 @@ class AtomEncoder(Module):
             atom_feats = [
                 atom_ref_pos,
                 feats["ref_charge"].unsqueeze(-1),
-                feats["ref_element"],
+                feats["ref_element"].cuda() if self.use_cpu_memory else feats["ref_element"],
             ]
             if not self.use_no_atom_char:
-                atom_feats.append(feats["ref_atom_name_chars"].reshape(B, N, 4 * 64))
+                atom_feats.append(feats["ref_atom_name_chars"].reshape(B, N, 4 * 64).cuda()
+                                  if self.use_cpu_memory else
+                                  feats["ref_atom_name_chars"].reshape(B, N, 4 * 64))
             if self.use_atom_backbone_feat:
                 atom_feats.append(feats["atom_backbone_feat"])
             if self.use_residue_feats_atoms:

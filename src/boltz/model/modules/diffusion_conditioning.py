@@ -30,6 +30,8 @@ class DiffusionConditioning(Module):
         use_no_atom_char: bool = False,
         use_atom_backbone_feat: bool = False,
         use_residue_feats_atoms: bool = False,
+        use_cpu_memory: bool = False,
+        inplace_operations: bool = False,
     ) -> None:
         super().__init__()
 
@@ -37,6 +39,8 @@ class DiffusionConditioning(Module):
             token_z=token_z,
             dim_token_rel_pos_feats=token_z,
             num_transitions=conditioning_transition_layers,
+            use_cpu_memory=use_cpu_memory,
+            inplace_operations=inplace_operations,
         )
 
         self.atom_encoder = AtomEncoder(
@@ -51,6 +55,7 @@ class DiffusionConditioning(Module):
             use_no_atom_char=use_no_atom_char,
             use_atom_backbone_feat=use_atom_backbone_feat,
             use_residue_feats_atoms=use_residue_feats_atoms,
+            use_cpu_memory=use_cpu_memory,
         )
 
         self.atom_enc_proj_z = nn.ModuleList()
@@ -79,6 +84,8 @@ class DiffusionConditioning(Module):
                     nn.Linear(token_z, token_transformer_heads, bias=False),
                 )
             )
+
+        self.inplace_operations = inplace_operations
 
     def forward(
         self,
@@ -110,7 +117,11 @@ class DiffusionConditioning(Module):
 
         token_trans_bias = []
         for layer in self.token_trans_proj_z:
-            token_trans_bias.append(layer(z))
+            #token_trans_bias.append(layer(z))
+            token_trans_bias.append(layer(z).float())
+        # casting before cat avoids large duplication later
+        del z
+
         token_trans_bias = torch.cat(token_trans_bias, dim=-1)
 
         return q, c, to_keys, atom_enc_bias, atom_dec_bias, token_trans_bias

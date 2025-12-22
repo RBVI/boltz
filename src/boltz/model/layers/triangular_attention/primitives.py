@@ -26,6 +26,9 @@ from boltz.model.layers.triangular_attention.utils import (
     permute_final_dims,
 )
 
+import torch
+from torch import nn
+
 
 class Linear(nn.Linear):
     """
@@ -361,6 +364,9 @@ class Attention(nn.Module):
             o = _attention(q, k, v, biases)
             o = o.transpose(-2, -3)
 
+        del q
+        del k
+        del v
         o = self._wrap_up(o, q_x)
 
         return o
@@ -397,7 +403,7 @@ def _trifast_attn(q, k, v, biases):
     # Make mask the right shape.
     mask = rearrange(mask, "b i () () j -> b i j").bool()
 
-    # Delay import to here to avoid initializing cuda too early
+    ## Delay import to here to avoid initializing cuda too early
     from trifast import triangle_attention
 
     o = triangle_attention(q, k, v, b, mask)

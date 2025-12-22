@@ -55,6 +55,8 @@ class DiffusionModule(Module):
         conditioning_transition_layers: int = 2,
         activation_checkpointing: bool = False,
         transformer_post_ln: bool = False,
+        use_cpu_memory: bool = False,
+        inplace_operations: bool = False,
     ) -> None:
         super().__init__()
 
@@ -62,13 +64,15 @@ class DiffusionModule(Module):
         self.atoms_per_window_keys = atoms_per_window_keys
         self.sigma_data = sigma_data
         self.activation_checkpointing = activation_checkpointing
-
+        self.inplace_operations = inplace_operations
+        
         # conditioning
         self.single_conditioner = SingleConditioning(
             sigma_data=sigma_data,
             token_s=token_s,
             dim_fourier=dim_fourier,
             num_transitions=conditioning_transition_layers,
+            inplace_operations=inplace_operations,
         )
 
         self.atom_attention_encoder = AtomAttentionEncoder(
@@ -148,7 +152,10 @@ class DiffusionModule(Module):
         )
 
         # Full self-attention on token level
-        a = a + self.s_to_a_linear(s)
+        if self.inplace_operations:
+            a += self.s_to_a_linear(s)
+        else:
+            a = a + self.s_to_a_linear(s)
 
         mask = feats["token_pad_mask"].repeat_interleave(multiplicity, 0)
         a = self.token_transformer(
@@ -197,9 +204,13 @@ class AtomDiffusion(Module):
         compile_score: bool = False,
         alignment_reverse_diff: bool = False,
         synchronize_sigmas: bool = False,
+        use_cpu_memory: bool = False,
+        inplace_operations: bool = False,
     ):
         super().__init__()
         self.score_model = DiffusionModule(
+            use_cpu_memory=use_cpu_memory,
+            inplace_operations=inplace_operations,
             **score_model_args,
         )
         if compile_score:
@@ -231,7 +242,8 @@ class AtomDiffusion(Module):
 
         self.token_s = score_model_args["token_s"]
         self.register_buffer("zero", torch.tensor(0.0), persistent=False)
-
+        self.inplace_operations = inplace_operations
+        
     @property
     def device(self):
         return next(self.score_model.parameters()).device

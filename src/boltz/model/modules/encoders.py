@@ -144,6 +144,7 @@ class SingleConditioning(Module):
         num_transitions=2,
         transition_expansion_factor=2,
         eps=1e-20,
+        inplace_operations: bool = False,
     ):
         """Initialize the single conditioning layer.
 
@@ -166,7 +167,8 @@ class SingleConditioning(Module):
         super().__init__()
         self.eps = eps
         self.sigma_data = sigma_data
-
+        self.inplace_operations = inplace_operations
+        
         input_dim = (
             2 * token_s + 2 * const.num_tokens + 1 + len(const.pocket_contact_info)
         )
@@ -201,7 +203,10 @@ class SingleConditioning(Module):
         s = rearrange(fourier_to_single, "b d -> b 1 d") + s
 
         for transition in self.transitions:
-            s = transition(s) + s
+            if self.inplace_operations:
+                s += transition(s)
+            else:
+                s = transition(s) + s
 
         return s, normed_fourier
 
@@ -215,6 +220,7 @@ class PairwiseConditioning(Module):
         dim_token_rel_pos_feats,
         num_transitions=2,
         transition_expansion_factor=2,
+        inplace_operations: bool = False,
     ):
         """Initialize the pairwise conditioning layer.
 
@@ -245,17 +251,24 @@ class PairwiseConditioning(Module):
             transitions.append(transition)
 
         self.transitions = transitions
-
+        self.inplace_operations = inplace_operations
+        
     def forward(
         self,
         z_trunk,
         token_rel_pos_feats,
+        chunk_size_transition_z=None
     ):
         z = torch.cat((z_trunk, token_rel_pos_feats), dim=-1)
+        del token_rel_pos_feats, z_trunk
+
         z = self.dim_pairwise_init_proj(z)
 
         for transition in self.transitions:
-            z = transition(z) + z
+            if self.inplace_operations:
+                z += transition(z, chunk_size_transition_z)
+            else:
+                z = transition(z) + z
 
         return z
 

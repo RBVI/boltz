@@ -12,7 +12,13 @@ from pathlib import Path
 from typing import Literal, Optional
 
 import click
+
+# Use expandable segments CUDA memory allocation to reduce fragmentation
+# and allow prediction of larger structures.
+if "PYTORCH_CUDA_ALLOC_CONF" not in os.environ:
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import torch
+
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.strategies import DDPStrategy
 from pytorch_lightning.utilities import rank_zero_only
@@ -894,6 +900,47 @@ def cli() -> None:
     help="Whether to dump the pde into a npz file. Default is False.",
 )
 @click.option(
+    "--chunk_size_transition_z",
+    type=click.INT,
+    help="Transition Z chunk size. Default is 64.",
+    default=None,
+)
+@click.option(
+    "--chunk_size_transition_msa",
+    type=int,
+    help="Transition MSA chunk size. Default is 32.",
+    default=32,
+)
+@click.option(
+    "--chunk_size_outer_product",
+    type=int,
+    help="Outer product chunk size. Default is 4.",
+    default=4,
+)
+@click.option(
+    "--chunk_size_tri_attn",
+    type=int,
+    help="Triangle attention chunk size. Default is 128.",
+    default=128,
+)
+@click.option(
+    "--triangle_mult_gate_nchunks",
+    type=int,
+    help="Triangle multiplication number of chunks. Default is 1.",
+    default=1,
+)
+@click.option(
+    "--chunk_size_threshold",
+    type=int,
+    help="Maximum size before chunking. Default is 384.",
+    default=384,
+)
+@click.option(
+    "--use_bfloat16",
+    is_flag=True,
+    help="Use bfloat16",
+)
+@click.option(
     "--output_format",
     type=click.Choice(["pdb", "mmcif"]),
     help="The output format to use for the predictions. Default is mmcif.",
@@ -1044,6 +1091,20 @@ def cli() -> None:
     "--msa_only",
     is_flag=True,
     help=" whether to only compute the MSA. Default is False.",
+@click.option(    
+    "--use_cpu_memory",
+    is_flag=True,
+    help="Whether to reduce GPU memory use by transfering some low-use tensors from CUDA GPU memory to CPU memory to allow predicting larger structures.",
+)
+@click.option(
+    "--inplace_operations",
+    is_flag=True,
+    help="Whether to reduce GPU memory by modifying tensors instead of making copies. Do not use this in training since it can cause incorrect gradients during back propagation.",
+)
+@click.option(
+    "--aggressive_chunking",
+    is_flag=True,
+    help="Whether to set chunking parametesr chunk_size_transition_z = 32, chunk_size_tri_attn = 64, triangle_mult_gate_nchunks = 4 to reduce GPU memory use to allow predicting larger structures.",
 )
 def predict(  # noqa: C901, PLR0915, PLR0912
     data: str,
@@ -1062,6 +1123,14 @@ def predict(  # noqa: C901, PLR0915, PLR0912
     step_scale: Optional[float] = None,
     write_full_pae: bool = True,
     write_full_pde: bool = True,
+    chunk_size_transition_z: int = 64,
+    chunk_size_transition_msa: int = 32,
+    chunk_size_outer_product: int = 4,
+    chunk_size_tri_attn: int = 128,
+    triangle_mult_gate_nchunks: int = 1,
+    chunk_size_threshold: int = 384,
+    use_kernels: bool = False,
+    use_bfloat16: bool = False,
     output_format: Literal["pdb", "mmcif"] = "mmcif",
     num_workers: int = 2,
     override: bool = False,
@@ -1085,6 +1154,9 @@ def predict(  # noqa: C901, PLR0915, PLR0912
     precision: Optional[str] = None,
     write_embeddings: bool = False,
     msa_only: bool = False,
+    use_cpu_memory: bool = False,
+    inplace_operations: bool = False,
+    aggressive_chunking: bool = False,
 ) -> None:
     """Run predictions with Boltz."""
     # If cpu, write a friendly warning
@@ -1317,6 +1389,12 @@ def predict(  # noqa: C901, PLR0915, PLR0912
             else:
                 checkpoint = cache / "boltz1_conf.ckpt"
 
+        # Reduce memory use at the expense of slower computation.
+        if aggressive_chunking:
+            chunk_size_transition_z = 32
+            chunk_size_tri_attn = 64
+            triangle_mult_gate_nchunks = 4
+
         predict_args = {
             "recycling_steps": recycling_steps,
             "sampling_steps": sampling_steps,
@@ -1325,6 +1403,12 @@ def predict(  # noqa: C901, PLR0915, PLR0912
             "write_confidence_summary": True,
             "write_full_pae": write_full_pae,
             "write_full_pde": write_full_pde,
+            "chunk_size_transition_z": chunk_size_transition_z,
+            "chunk_size_transition_msa": chunk_size_transition_msa,
+            "chunk_size_outer_product": chunk_size_outer_product,
+            "chunk_size_tri_attn": chunk_size_tri_attn,
+            "chunk_size_threshold": chunk_size_threshold,
+            "triangle_mult_gate_nchunks": triangle_mult_gate_nchunks
         }
 
         steering_args = BoltzSteeringParams()
@@ -1345,18 +1429,33 @@ def predict(  # noqa: C901, PLR0915, PLR0912
             pairformer_args=asdict(pairformer_args),
             msa_args=asdict(msa_args),
             steering_args=asdict(steering_args),
+            use_cpu_memory=use_cpu_memory,
+            inplace_operations=inplace_operations,
         )
         model_module.eval()
+
         sys.stderr.write(f'{time.ctime()}: Finished loading Boltz structure prediction weights\n')
 
         # Compute structure predictions
         import sys, time
         sys.stderr.write(f'{time.ctime()}: Starting structure inference\n')
-        trainer.predict(
-            model_module,
-            datamodule=data_module,
-            return_predictions=False,
-        )
+
+        if use_bfloat16:
+            # Compute structure predictions
+            with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                trainer.predict(
+                    model_module,
+                    datamodule=data_module,
+                    return_predictions=False,
+                )
+        else:
+            # Compute structure predictions
+            trainer.predict(
+                model_module,
+                datamodule=data_module,
+                return_predictions=False,
+            )
+
         sys.stderr.write(f'{time.ctime()}: Finished structure inference\n')
 
     # Check if affinity predictions are needed
@@ -1404,6 +1503,12 @@ def predict(  # noqa: C901, PLR0915, PLR0912
             "write_confidence_summary": False,
             "write_full_pae": False,
             "write_full_pde": False,
+            "chunk_size_transition_z": chunk_size_transition_z,
+            "chunk_size_transition_msa": chunk_size_transition_msa,
+            "chunk_size_outer_product": chunk_size_outer_product,
+            "chunk_size_tri_attn": chunk_size_tri_attn,
+            "chunk_size_threshold": chunk_size_threshold,
+            "triangle_mult_gate_nchunks": triangle_mult_gate_nchunks,
         }
 
         # Load affinity model
@@ -1437,11 +1542,19 @@ def predict(  # noqa: C901, PLR0915, PLR0912
         sys.stderr.write(f'{time.ctime()}: Starting affinity inference\n')
         trainer.callbacks[0] = pred_writer
         trainer.callbacks[1] = start_prediction_logger(len(manifest_filtered.records))
-        trainer.predict(
-            model_module,
-            datamodule=data_module,
-            return_predictions=False,
-        )
+        if use_bfloat16:
+            with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                trainer.predict(
+                        model_module,
+                        datamodule=data_module,
+                        return_predictions=False,
+                    )
+        else:
+            trainer.predict(
+                model_module,
+                datamodule=data_module,
+                return_predictions=False,
+            )
         sys.stderr.write(f'{time.ctime()}: Finished affinity inference\n')
 
 from pytorch_lightning.callbacks import Callback

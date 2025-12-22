@@ -61,6 +61,8 @@ class DiffusionModule(Module):
         conditioning_transition_layers: int = 2,
         activation_checkpointing: bool = False,
         offload_to_cpu: bool = False,
+        use_cpu_memory: bool = False,
+        inplace_operations: bool = False,
         **kwargs,
     ) -> None:
         """Initialize the diffusion module.
@@ -110,17 +112,21 @@ class DiffusionModule(Module):
         self.atoms_per_window_queries = atoms_per_window_queries
         self.atoms_per_window_keys = atoms_per_window_keys
         self.sigma_data = sigma_data
+        self.inplace_operations = inplace_operations
 
         self.single_conditioner = SingleConditioning(
             sigma_data=sigma_data,
             token_s=token_s,
             dim_fourier=dim_fourier,
             num_transitions=conditioning_transition_layers,
+            inplace_operations=inplace_operations,
         )
         self.pairwise_conditioner = PairwiseConditioning(
             token_z=token_z,
             dim_token_rel_pos_feats=token_z,
             num_transitions=conditioning_transition_layers,
+            use_cpu_memory=use_cpu_memory,
+            inplace_operations=inplace_operations,
         )
 
         self.atom_attention_encoder = AtomAttentionEncoder(
@@ -174,6 +180,7 @@ class DiffusionModule(Module):
         times,
         relative_position_encoding,
         feats,
+        chunk_size_transition_z=None,
         multiplicity=1,
         model_cache=None,
     ):
@@ -185,7 +192,8 @@ class DiffusionModule(Module):
 
         if model_cache is None or len(model_cache) == 0:
             z = self.pairwise_conditioner(
-                z_trunk=z_trunk, token_rel_pos_feats=relative_position_encoding
+                z_trunk=z_trunk, token_rel_pos_feats=relative_position_encoding,
+                chunk_size_transition_z=chunk_size_transition_z
             )
         else:
             z = None
@@ -201,7 +209,10 @@ class DiffusionModule(Module):
         )
 
         # Full self-attention on token level
-        a = a + self.s_to_a_linear(s)
+        if self.inplace_operations:
+            a += self.s_to_a_linear(s)
+        else:
+            a = a + self.s_to_a_linear(s)
 
         mask = feats["token_pad_mask"].repeat_interleave(multiplicity, 0)
         a = self.token_transformer(
@@ -276,7 +287,10 @@ class OutTokenFeatUpdate(Module):
         )
         cond_a = torch.cat((acc_a, normed_fourier), dim=-1)
 
-        acc_a = acc_a + self.transition_block(next_a, cond_a)
+        if self.inplace_operatoins:
+            acc_a += self.transition_block(next_a, cond_a)
+        else:
+            acc_a = acc_a + self.transition_block(next_a, cond_a)
 
         return acc_a
 
@@ -304,6 +318,8 @@ class AtomDiffusion(Module):
         synchronize_sigmas=False,
         use_inference_model_cache=False,
         accumulate_token_repr=False,
+        use_cpu_memory: bool = False,
+        inplace_operations: bool = False,            
         **kwargs,
     ):
         """Initialize the atom diffusion module.
@@ -350,6 +366,8 @@ class AtomDiffusion(Module):
         """
         super().__init__()
         self.score_model = DiffusionModule(
+            use_cpu_memory=use_cpu_memory,
+            inplace_operations=inplace_operations,
             **score_model_args,
         )
         if compile_score:
@@ -373,7 +391,8 @@ class AtomDiffusion(Module):
         self.alignment_reverse_diff = alignment_reverse_diff
         self.synchronize_sigmas = synchronize_sigmas
         self.use_inference_model_cache = use_inference_model_cache
-
+        self.inplace_operations = inplace_operations
+        
         self.accumulate_token_repr = accumulate_token_repr
         self.token_s = score_model_args["token_s"]
         if self.accumulate_token_repr:
@@ -727,6 +746,7 @@ class AtomDiffusion(Module):
         relative_position_encoding,
         feats,
         multiplicity=1,
+        chunk_size_transition_z=None
     ):
         # training diffusion step
         batch_size = feats["coords"].shape[0]
@@ -766,6 +786,7 @@ class AtomDiffusion(Module):
                 relative_position_encoding=relative_position_encoding,
                 feats=feats,
                 multiplicity=multiplicity,
+                chunk_size_transition_z=chunk_size_transition_z
             ),
         )
 

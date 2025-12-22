@@ -104,6 +104,8 @@ class Boltz2(LightningModule):
         checkpoint_diffusion_conditioning: bool = False,
         use_templates_v2: bool = False,
         use_kernels: bool = False,
+        use_cpu_memory: bool = False,
+        inplace_operations: bool = False,
     ) -> None:
         super().__init__()
         self.save_hyperparameters(ignore=["validators"])
@@ -162,6 +164,12 @@ class Boltz2(LightningModule):
         # Kernels
         self.use_kernels = use_kernels
 
+        # Move some tensors from GPU to CPU memory 
+        self.use_cpu_memory = use_cpu_memory
+
+        # Allow modifying tensors in place
+        self.inplace_operations = inplace_operations
+        
         # Input embeddings
         full_embedder_args = {
             "atom_s": atom_s,
@@ -174,6 +182,7 @@ class Boltz2(LightningModule):
             "use_no_atom_char": use_no_atom_char,
             "use_atom_backbone_feat": use_atom_backbone_feat,
             "use_residue_feats_atoms": use_residue_feats_atoms,
+            "use_cpu_memory": use_cpu_memory,
             **embedder_args,
         }
         self.input_embedder = InputEmbedder(**full_embedder_args)
@@ -216,9 +225,13 @@ class Boltz2(LightningModule):
         self.use_templates = use_templates
         if use_templates:
             if use_templates_v2:
-                self.template_module = TemplateV2Module(token_z, **template_args)
+                self.template_module = TemplateV2Module(token_z,
+                                                        inplace_operations=inplace_operations,
+                                                        **template_args)
             else:
-                self.template_module = TemplateModule(token_z, **template_args)
+                self.template_module = TemplateModule(token_z,
+                                                      inplace_operations=inplace_operations,
+                                                      **template_args)
             if compile_templates:
                 self.is_template_compiled = True
                 self.template_module = torch.compile(
@@ -230,6 +243,8 @@ class Boltz2(LightningModule):
         self.msa_module = MSAModule(
             token_z=token_z,
             token_s=token_s,
+            use_cpu_memory=use_cpu_memory,
+            inplace_operations=inplace_operations,
             **msa_args,
         )
         if compile_msa:
@@ -239,7 +254,9 @@ class Boltz2(LightningModule):
                 dynamic=False,
                 fullgraph=False,
             )
-        self.pairformer_module = PairformerModule(token_s, token_z, **pairformer_args)
+        self.pairformer_module = PairformerModule(token_s, token_z,
+                                                  inplace_operations=inplace_operations,
+                                                  **pairformer_args)
         if compile_pairformer:
             self.is_pairformer_compiled = True
             self.pairformer_module = torch.compile(
@@ -269,6 +286,8 @@ class Boltz2(LightningModule):
             use_no_atom_char=use_no_atom_char,
             use_atom_backbone_feat=use_atom_backbone_feat,
             use_residue_feats_atoms=use_residue_feats_atoms,
+            use_cpu_memory=use_cpu_memory,
+            inplace_operations=inplace_operations,
         )
 
         # Output modules
@@ -281,6 +300,8 @@ class Boltz2(LightningModule):
                 **score_model_args,
             },
             compile_score=compile_structure,
+            use_cpu_memory=use_cpu_memory,
+            inplace_operations=inplace_operations,
             **diffusion_process_args,
         )
         self.distogram_module = DistogramModule(
@@ -311,6 +332,8 @@ class Boltz2(LightningModule):
                 cyclic_pos_enc=cyclic_pos_enc,
                 conditioning_cutoff_min=conditioning_cutoff_min,
                 conditioning_cutoff_max=conditioning_cutoff_max,
+                use_cpu_memory=use_cpu_memory,
+                inplace_operations=inplace_operations,
                 **confidence_model_args,
             )
             if compile_confidence:
@@ -323,11 +346,13 @@ class Boltz2(LightningModule):
                 self.affinity_module1 = AffinityModule(
                     token_s,
                     token_z,
+                    use_cpu_memory=use_cpu_memory,
                     **affinity_model_args1,
                 )
                 self.affinity_module2 = AffinityModule(
                     token_s,
                     token_z,
+                    use_cpu_memory=use_cpu_memory,
                     **affinity_model_args2,
                 )
                 if compile_affinity:
@@ -341,6 +366,7 @@ class Boltz2(LightningModule):
                 self.affinity_module = AffinityModule(
                     token_s,
                     token_z,
+                    use_cpu_memory=use_cpu_memory,
                     **affinity_model_args,
                 )
                 if compile_affinity:
@@ -407,11 +433,26 @@ class Boltz2(LightningModule):
         diffusion_samples: int = 1,
         max_parallel_samples: Optional[int] = None,
         run_confidence_sequentially: bool = False,
+        chunk_size_transition_z: int = None,
+        chunk_size_transition_msa: int = None,
+        chunk_size_outer_product: int = None,
+        chunk_size_tri_attn: int = None,
+        triangle_mult_gate_nchunks: int = 1,
+        chunk_size_threshold: int = 384
     ) -> dict[str, Tensor]:
+        if self.use_cpu_memory:
+            feats["token_to_rep_atom"] = feats["token_to_rep_atom"].cpu() #confidence
+            feats["msa_mask"] = feats["msa_mask"].cpu()
+        feats.pop("r_set_to_rep_atom")
+        feats.pop("disto_target")
         with torch.set_grad_enabled(
             self.training and self.structure_prediction_training
         ):
             s_inputs = self.input_embedder(feats)
+            if self.use_cpu_memory:
+                for key in ["atom_to_token", "ref_atom_name_chars", 
+                            "ref_element", "atom_resolved_mask", "coords"]:
+                    feats[key] = feats[key].cpu()
 
             # Initialize the sequence embeddings
             s_init = self.s_init(s_inputs)
@@ -422,15 +463,38 @@ class Boltz2(LightningModule):
                 + self.z_init_2(s_inputs)[:, None, :]
             )
             relative_position_encoding = self.rel_pos(feats)
-            z_init = z_init + relative_position_encoding
-            z_init = z_init + self.token_bonds(feats["token_bonds"].float())
+            if self.inplace_operations:
+                z_init += relative_position_encoding
+                z_init += self.token_bonds(feats["token_bonds"].float())
+            else:
+                z_init = z_init + relative_position_encoding
+                z_init = z_init + self.token_bonds(feats["token_bonds"].float())
+
+            if self.use_cpu_memory:
+                feats["token_bonds"] = feats["token_bonds"].cpu()            
+            
             if self.bond_type_feature:
-                z_init = z_init + self.token_bonds_type(feats["type_bonds"].long())
-            z_init = z_init + self.contact_conditioning(feats)
+                if self.inplace_operations:
+                    z_init += self.token_bonds_type(feats["type_bonds"].long())
+                else:
+                    z_init = z_init + self.token_bonds_type(feats["type_bonds"].long())
+
+                #Changes precision compared to original
+
+            if self.inplace_operations:
+                z_init += self.contact_conditioning(feats)
+            else:
+                z_init = z_init + self.contact_conditioning(feats)
+
+            if self.use_cpu_memory:
+                feats['contact_conditioning'] = feats['contact_conditioning'].cpu()
+                feats['contact_threshold'] = feats['contact_threshold'].cpu()
 
             # Perform rounds of the pairwise stack
             s = torch.zeros_like(s_init)
             z = torch.zeros_like(z_init)
+            if self.use_cpu_memory:
+                z_init = z_init.cpu()
 
             # Compute pairwise mask
             mask = feats["token_pad_mask"].float()
@@ -450,9 +514,12 @@ class Boltz2(LightningModule):
                         ):
                             torch.clear_autocast_cache()
 
-                        # Apply recycling
+                        # Apply recycling - Is z_init or z correct here?
                         s = s_init + self.s_recycle(self.s_norm(s))
-                        z = z_init + self.z_recycle(self.z_norm(z))
+                        if self.use_cpu_memory:
+                            z = z_init.cuda() + self.z_recycle(self.z_norm(z))
+                        else:
+                            z = z_init + self.z_recycle(self.z_norm(z))
 
                         # Compute pairwise stack
                         if self.use_templates:
@@ -461,19 +528,52 @@ class Boltz2(LightningModule):
                             else:
                                 template_module = self.template_module
 
-                            z = z + template_module(
-                                z, feats, pair_mask, use_kernels=self.use_kernels
-                            )
+                            if self.inplace_operations:
+                                z += template_module(
+                                    z, feats, pair_mask, use_kernels=self.use_kernels
+                                )
+                            else:
+                                z = z + template_module(
+                                    z, feats, pair_mask, use_kernels=self.use_kernels
+                                )
 
                         if self.is_msa_compiled and not self.training:
                             msa_module = self.msa_module._orig_mod  # noqa: SLF001
                         else:
                             msa_module = self.msa_module
 
-                        z = z + msa_module(
-                            z, s_inputs, feats, use_kernels=self.use_kernels
+                        if self.use_cpu_memory:
+                            feats["msa"] = feats["msa"].cuda()
+                            feats["msa_paired"] = feats["msa_paired"].cuda()
+                            feats["has_deletion"] = feats["has_deletion"].cuda()
+                            feats["deletion_value"] = feats["deletion_value"].cuda()
+                        
+                        #z = z + msa_module(
+                        #    z, s_inputs, feats, use_kernels=self.use_kernels
+                        #)
+                        if self.use_cpu_memory:
+                            z_orig = z.cpu()
+                        else:
+                            z_orig = z
+                        z = msa_module(
+                            z, s_inputs, feats, use_kernels=self.use_kernels,
+                            chunk_size_transition_z=chunk_size_transition_z, 
+                            chunk_size_transition_msa=chunk_size_transition_msa, 
+                            chunk_size_outer_product=chunk_size_outer_product, 
+                            chunk_size_tri_attn=chunk_size_tri_attn,
+                            triangle_mult_gate_nchunks=triangle_mult_gate_nchunks,
+                            chunk_size_threshold=chunk_size_threshold
                         )
-
+                        if self.use_cpu_memory:
+                            if self.inplace_operations:
+                                z += z_orig.cuda()
+                            else:
+                                z = z + z_orig.cuda()
+                        else:
+                            if self.inplace_operations:
+                                z += z_orig
+                            else:
+                                z = z + z_orig
                         # Revert to uncompiled version for validation
                         if self.is_pairformer_compiled and not self.training:
                             pairformer_module = self.pairformer_module._orig_mod  # noqa: SLF001
@@ -486,6 +586,10 @@ class Boltz2(LightningModule):
                             mask=mask,
                             pair_mask=pair_mask,
                             use_kernels=self.use_kernels,
+                            chunk_size_transition_z=chunk_size_transition_z, 
+                            chunk_size_tri_attn=chunk_size_tri_attn,
+                            triangle_mult_gate_nchunks=triangle_mult_gate_nchunks,
+                            chunk_size_threshold=chunk_size_threshold
                         )
 
             pdistogram = self.distogram_module(z)
@@ -494,6 +598,13 @@ class Boltz2(LightningModule):
                 "s": s,
                 "z": z,
             }
+            
+            del mask, pair_mask, pdistogram
+            if self.use_cpu_memory:
+                dict_out["pdistogram"] = dict_out["pdistogram"].cpu()
+                feats["atom_to_token"] = feats["atom_to_token"].cuda()
+                feats["ref_element"] = feats["ref_element"].cuda()
+                feats["ref_atom_name_chars"] = feats["ref_atom_name_chars"].cuda()
 
             if (
                 self.run_trunk_and_structure
@@ -507,19 +618,40 @@ class Boltz2(LightningModule):
                             self.diffusion_conditioning,
                             s,
                             z,
-                            relative_position_encoding,
+                            #relative_position_encoding,
+                            {"key": self.rel_pos(feats)},
                             feats,
                         )
                     )
                 else:
-                    q, c, to_keys, atom_enc_bias, atom_dec_bias, token_trans_bias = (
-                        self.diffusion_conditioning(
-                            s_trunk=s,
-                            z_trunk=z,
-                            relative_position_encoding=relative_position_encoding,
-                            feats=feats,
+                    if self.use_cpu_memory:
+                        relative_position_encoding = {"key": self.rel_pos(feats)}
+                        z_container = {"key": z}
+                        del z
+                        q, c, to_keys, atom_enc_bias, atom_dec_bias, token_trans_bias = (
+                            self.diffusion_conditioning(
+                                s_trunk=s,
+                                #z_trunk=z,
+                                z_trunk=z_container,
+                                relative_position_encoding=relative_position_encoding,
+                                feats=feats,
+                            )
                         )
-                    )
+                        del relative_position_encoding
+                    else:
+                        q, c, to_keys, atom_enc_bias, atom_dec_bias, token_trans_bias = (
+                            self.diffusion_conditioning(
+                                s_trunk=s,
+                                z_trunk=z,
+                                relative_position_encoding=relative_position_encoding,
+                                feats=feats,
+                            )
+                        )
+
+                if self.use_cpu_memory:
+                    feats["ref_element"] = feats["ref_element"].cpu()
+                    feats["ref_atom_name_chars"] = feats["ref_atom_name_chars"].cpu()
+
                 diffusion_conditioning = {
                     "q": q,
                     "c": c,
@@ -528,6 +660,7 @@ class Boltz2(LightningModule):
                     "atom_dec_bias": atom_dec_bias,
                     "token_trans_bias": token_trans_bias,
                 }
+                del q, c, to_keys, atom_enc_bias, atom_dec_bias, token_trans_bias
 
                 with torch.autocast("cuda", enabled=False):
                     struct_out = self.structure_module.sample(
@@ -542,6 +675,15 @@ class Boltz2(LightningModule):
                         diffusion_conditioning=diffusion_conditioning,
                     )
                     dict_out.update(struct_out)
+
+                if self.use_cpu_memory:
+                    for k, v in dict_out.items():
+                        try:
+                            dict_out[k] = v.cpu()
+                        except AttributeError:
+                            continue
+
+                del diffusion_conditioning
 
                 if self.predict_bfactor:
                     pbfactor = self.bfactor_module(s)
@@ -583,6 +725,9 @@ class Boltz2(LightningModule):
                 assert len(feats["coords"].shape) == 3
 
         if self.confidence_prediction:
+            if self.use_cpu_memory:
+                z = z_container.pop("key")
+                z = z.cuda()
             dict_out.update(
                 self.confidence_module(
                     s_inputs=s_inputs.detach(),
@@ -602,8 +747,16 @@ class Boltz2(LightningModule):
                     multiplicity=diffusion_samples,
                     run_sequentially=run_confidence_sequentially,
                     use_kernels=self.use_kernels,
+                    chunk_size_transition_z=chunk_size_transition_z,
+                    chunk_size_transition_msa=chunk_size_transition_msa,
+                    chunk_size_outer_product=chunk_size_outer_product,
+                    chunk_size_tri_attn=chunk_size_tri_attn,
+                    triangle_mult_gate_nchunks=triangle_mult_gate_nchunks,
+                    chunk_size_threshold=chunk_size_threshold
                 )
             )
+        if self.use_cpu_memory:
+            dict_out["sample_atom_coords"] = dict_out["sample_atom_coords"].cuda()
 
         if self.affinity_prediction:
             pad_token_mask = feats["token_pad_mask"][0]
@@ -1063,6 +1216,12 @@ class Boltz2(LightningModule):
                 diffusion_samples=self.predict_args["diffusion_samples"],
                 max_parallel_samples=self.predict_args["max_parallel_samples"],
                 run_confidence_sequentially=True,
+                chunk_size_transition_z=self.predict_args["chunk_size_transition_z"],
+                chunk_size_transition_msa=self.predict_args["chunk_size_transition_msa"],
+                chunk_size_outer_product=self.predict_args["chunk_size_outer_product"],
+                chunk_size_tri_attn=self.predict_args["chunk_size_tri_attn"],            
+                triangle_mult_gate_nchunks=self.predict_args["triangle_mult_gate_nchunks"],
+                chunk_size_threshold=self.predict_args["chunk_size_threshold"]
             )
             pred_dict = {"exception": False}
             if "keys_dict_batch" in self.predict_args:

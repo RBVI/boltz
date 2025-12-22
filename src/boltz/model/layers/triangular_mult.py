@@ -39,7 +39,10 @@ def kernel_triangular_mult(
 class TriangleMultiplicationOutgoing(nn.Module):
     """TriangleMultiplicationOutgoing."""
 
-    def __init__(self, dim: int = 128) -> None:
+    def __init__(self,
+                 dim: int = 128,
+                 inplace_operations: bool = False,
+                 ) -> None:
         """Initialize the TriangularUpdate module.
 
         Parameters
@@ -49,6 +52,9 @@ class TriangleMultiplicationOutgoing(nn.Module):
 
         """
         super().__init__()
+
+        # Allow modifying tensors in place
+        self.inplace_operations = inplace_operations
 
         self.norm_in = nn.LayerNorm(dim, eps=1e-5)
         self.p_in = nn.Linear(dim, 2 * dim, bias=False)
@@ -70,7 +76,7 @@ class TriangleMultiplicationOutgoing(nn.Module):
         init.final_init_(self.p_out.weight)
         init.gating_init_(self.g_out.weight)
 
-    def forward(self, x: Tensor, mask: Tensor, use_kernels: bool = False) -> Tensor:
+    def forward(self, x: Tensor, mask: Tensor, use_kernels: bool = False, triangle_mult_gate_nchunks: int=1) -> Tensor:
         """Perform a forward pass.
 
         Parameters
@@ -107,16 +113,29 @@ class TriangleMultiplicationOutgoing(nn.Module):
         # Input gating: D -> D
         x = self.norm_in(x)
         x_in = x
-        x = self.p_in(x) * self.g_in(x).sigmoid()
+        if self.inplace_operations:
+            chunk_sizes = torch.linspace(0, x.shape[2], steps=triangle_mult_gate_nchunks+1, device=x.device).long()
+            x = torch.empty((x.shape[0], x.shape[1], x.shape[2], x.shape[3]*2), device=x.device)
+            for i in range(triangle_mult_gate_nchunks):
+                start = chunk_sizes[i].item()
+                end = chunk_sizes[i+1].item()
+                x[:,:,start:end,:] = self.p_in(x_in[:,:,start:end,:])*self.g_in(x_in[:,:,start:end,:]).sigmoid()
+        else:
+            x = self.p_in(x) * self.g_in(x).sigmoid()
 
         # Apply mask
-        x = x * mask.unsqueeze(-1)
+        if self.inplace_operations:
+            x *= mask.unsqueeze(-1)
+        else:
+            x = x * mask.unsqueeze(-1)
 
         # Split input and cast to float
         a, b = torch.chunk(x.float(), 2, dim=-1)
 
         # Triangular projection
+        # This becomes a bottleneck - can easily be chunked
         x = torch.einsum("bikd,bjkd->bijd", a, b)
+        del a, b
 
         # Output gating
         x = self.p_out(self.norm_out(x)) * self.g_out(x_in).sigmoid()
@@ -127,7 +146,10 @@ class TriangleMultiplicationOutgoing(nn.Module):
 class TriangleMultiplicationIncoming(nn.Module):
     """TriangleMultiplicationIncoming."""
 
-    def __init__(self, dim: int = 128) -> None:
+    def __init__(self,
+                 dim: int = 128,
+                 inplace_operations: bool = False,
+                 ) -> None:
         """Initialize the TriangularUpdate module.
 
         Parameters
@@ -137,6 +159,9 @@ class TriangleMultiplicationIncoming(nn.Module):
 
         """
         super().__init__()
+
+        # Allow modifying tensors in place
+        self.inplace_operations = inplace_operations
 
         self.norm_in = nn.LayerNorm(dim, eps=1e-5)
         self.p_in = nn.Linear(dim, 2 * dim, bias=False)
@@ -158,7 +183,7 @@ class TriangleMultiplicationIncoming(nn.Module):
         init.final_init_(self.p_out.weight)
         init.gating_init_(self.g_out.weight)
 
-    def forward(self, x: Tensor, mask: Tensor, use_kernels: bool = False) -> Tensor:
+    def forward(self, x: Tensor, mask: Tensor, use_kernels: bool = False, triangle_mult_gate_nchunks: int=1) -> Tensor:
         """Perform a forward pass.
 
         Parameters
@@ -195,16 +220,30 @@ class TriangleMultiplicationIncoming(nn.Module):
         # Input gating: D -> D
         x = self.norm_in(x)
         x_in = x
-        x = self.p_in(x) * self.g_in(x).sigmoid()
+        
+        if self.inplace_operations:
+            chunk_sizes = torch.linspace(0, x.shape[2], steps=triangle_mult_gate_nchunks+1, device=x.device).long()
+            x = torch.empty((x.shape[0], x.shape[1], x.shape[2], x.shape[3]*2), device=x.device)
+            for i in range(triangle_mult_gate_nchunks):
+                start = chunk_sizes[i].item()
+                end = chunk_sizes[i+1].item()
+                x[:,:,start:end,:] = self.p_in(x_in[:,:,start:end,:])*self.g_in(x_in[:,:,start:end,:]).sigmoid()
+        else:
+            x = self.p_in(x) * self.g_in(x).sigmoid()
 
         # Apply mask
-        x = x * mask.unsqueeze(-1)
+        if self.inplace_operations:
+            x *= mask.unsqueeze(-1)
+        else:
+            x = x * mask.unsqueeze(-1)
 
         # Split input and cast to float
         a, b = torch.chunk(x.float(), 2, dim=-1)
 
         # Triangular projection
+        # This becomes a bottleneck - can easily be chunked
         x = torch.einsum("bkid,bkjd->bijd", a, b)
+        del a, b
 
         # Output gating
         x = self.p_out(self.norm_out(x)) * self.g_out(x_in).sigmoid()
