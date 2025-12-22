@@ -1091,6 +1091,7 @@ def cli() -> None:
     "--msa_only",
     is_flag=True,
     help=" whether to only compute the MSA. Default is False.",
+)
 @click.option(    
     "--use_cpu_memory",
     is_flag=True,
