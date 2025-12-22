@@ -1155,8 +1155,8 @@ def predict(  # noqa: C901, PLR0915, PLR0912
     precision: Optional[str] = None,
     write_embeddings: bool = False,
     msa_only: bool = False,
-    use_cpu_memory: bool = False,
-    inplace_operations: bool = False,
+    use_cpu_memory: Optional[bool] = None,
+    inplace_operations: Optional[bool] = None,
     aggressive_chunking: bool = False,
 ) -> None:
     """Run predictions with Boltz."""
@@ -1337,11 +1337,11 @@ def predict(  # noqa: C901, PLR0915, PLR0912
     )
 
     # bfloat16 is many times slower than float32 except with Nvidia CUDA.
+    using_cuda =  (platform.system() in ('Linux', 'Windows')
+                   and accelerator == 'gpu'
+                   and torch.cuda.is_available())
     if precision is None:
-        if (platform.system() in ('Linux', 'Windows')
-            and accelerator == 'gpu'
-            and torch.cuda.is_available()
-            and model != "boltz1"):
+        if using_cuda and model != "boltz1":
             precision = "bf16-mixed"
         else:
             precision = 32
@@ -1390,6 +1390,12 @@ def predict(  # noqa: C901, PLR0915, PLR0912
             else:
                 checkpoint = cache / "boltz1_conf.ckpt"
 
+        # Enable low memory options if using CUDA.
+        if use_cpu_memory is None:
+            use_cpu_memory = using_cuda
+        if inplace_operations is None:
+            inplace_operations = using_cuda
+            
         # Reduce memory use at the expense of slower computation.
         if aggressive_chunking:
             chunk_size_transition_z = 32
