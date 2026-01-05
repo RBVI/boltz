@@ -1095,11 +1095,13 @@ def cli() -> None:
 @click.option(    
     "--use_cpu_memory",
     is_flag=True,
+    default=None,
     help="Whether to reduce GPU memory use by transfering some low-use tensors from CUDA GPU memory to CPU memory to allow predicting larger structures.",
 )
 @click.option(
     "--inplace_operations",
     is_flag=True,
+    default=None,
     help="Whether to reduce GPU memory by modifying tensors instead of making copies. Do not use this in training since it can cause incorrect gradients during back propagation.",
 )
 @click.option(
