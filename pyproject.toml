@@ -9,7 +9,7 @@ requires-python = ">=3.10,<3.13"
 description = "Boltz"
 readme = "README.md"
 dependencies = [
-    "torch==2.7.1",		# 2.9.1 is 50% slower on Mac
+    "torch==2.9.1",		# Need 2.8 or newer for Nvidia Blackwell GPUs (e.g. 5090)
     "numpy>=1.26,<2.0",
     "hydra-core==1.3.2",
     "pytorch-lightning==2.5.0",
