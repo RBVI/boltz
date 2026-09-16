@@ -410,8 +410,9 @@ class PoseBustersPotential(FlatBottomPotential, DistancePotential):
         vdw_radii[1:119] = torch.tensor(
             const.vdw_radii, dtype=torch.float32, device=pair_index.device
         )
+        ref_elem = feats["ref_element"].to(vdw_radii.device).float()
         atom_vdw_radii = (
-            feats["ref_element"].float() @ vdw_radii.unsqueeze(-1)
+            ref_elem @ vdw_radii.unsqueeze(-1)
         ).squeeze(-1)[0]
         bond_cutoffs = 0.35 + atom_vdw_radii[pair_index].mean(dim=0)
         lower_bounds[~bond_mask] = torch.max(lower_bounds[~bond_mask], bond_cutoffs[~bond_mask])
@@ -454,7 +455,7 @@ class VDWOverlapPotential(FlatBottomPotential, DistancePotential):
         vdw_radii[1:119] = torch.tensor(
             const.vdw_radii, dtype=torch.float32, device=atom_chain_id.device
         )
-        ref_elem = feats["ref_element"].cuda().float() if self.use_cpu_memory else feats["ref_element"].float()
+        ref_elem = feats["ref_element"].to(vdw_radii.device).float()
         atom_vdw_radii = (
             ref_elem @ vdw_radii.unsqueeze(-1)
         ).squeeze(-1)[0]
