@@ -32,9 +32,9 @@ dependencies = [
     "gemmi==0.6.5",
     "scikit-learn==1.6.1",
     "chembl_structure_pipeline==1.2.2",
-    'cuequivariance_ops_cu12>=0.5.0 ; sys_platform == "linux"',
+    'cuequivariance_ops_cu12==0.10.0 ; sys_platform == "linux"',
     'cuequivariance_ops_torch_cu12==0.10.0 ; sys_platform == "linux"',
-    "cuequivariance_torch>=0.5.0",
+    "cuequivariance_torch==0.10.0",
 ]
 
 [project.scripts]
@@ -44,9 +44,9 @@ boltz = "boltz.main:cli"
 lint = ["ruff"]
 test = ["pytest", "requests"]
 cuda = [
-    "cuequivariance_ops_cu12>=0.5.0",
-    "cuequivariance_ops_torch_cu12>=0.5.0",
-    "cuequivariance_torch>=0.5.0",
+    "cuequivariance_ops_cu12==0.10.0",
+    "cuequivariance_ops_torch_cu12==0.10.0",
+    "cuequivariance_torch==0.10.0",
 ]
 
 [tool.ruff]
